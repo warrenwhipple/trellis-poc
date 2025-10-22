@@ -14,7 +14,10 @@ export default function RootLayout({
 	children: React.ReactNode;
 }>) {
 	return (
-		<html lang="en" className={`overscroll-none ${GeistSans.variable} ${GeistMono.variable}`}>
+		<html
+			lang="en"
+			className={`overscroll-none ${GeistSans.variable} ${GeistMono.variable}`}
+		>
 			<body className="overscroll-none font-sans">{children}</body>
 		</html>
 	);
