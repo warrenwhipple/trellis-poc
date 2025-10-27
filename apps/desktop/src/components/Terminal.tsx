@@ -1,10 +1,10 @@
 import { type ITheme, Terminal as XTerm } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 
 interface TerminalProps {
 	hidden?: boolean;
@@ -115,6 +115,9 @@ export default function TerminalComponent({
 
 		term.open(container);
 
+		// Track if terminal is disposed to prevent operations on disposed terminal
+		let isDisposed = false;
+
 		// Load addons
 		// 1. WebLinks - Makes URLs clickable and open in default browser
 		const webLinksAddon = new WebLinksAddon((event, uri) => {
@@ -124,8 +127,9 @@ export default function TerminalComponent({
 		term.loadAddon(webLinksAddon);
 
 		// 2. WebGL Renderer - Better performance for rendering
+		let webglAddon: WebglAddon | null = null;
 		try {
-			const webglAddon = new WebglAddon();
+			webglAddon = new WebglAddon();
 			term.loadAddon(webglAddon);
 		} catch (e) {
 			console.warn("WebGL addon failed to load, falling back to canvas:", e);
@@ -134,15 +138,39 @@ export default function TerminalComponent({
 		// 3. FitAddon - Automatically fit terminal to container
 		const fitAddon = new FitAddon();
 		term.loadAddon(fitAddon);
-		fitAddon.fit();
+
+		// Delay initial fit to ensure renderer is ready
+		setTimeout(() => {
+			if (!isDisposed) {
+				try {
+					fitAddon.fit();
+				} catch (e) {
+					console.warn("Initial fit failed:", e);
+				}
+			}
+		}, 0);
 
 		// 4. SearchAddon - Enable text searching (Ctrl+F or Cmd+F)
 		const searchAddon = new SearchAddon();
 		term.loadAddon(searchAddon);
 
 		// Listen for window resize to auto-fit terminal
+		// Debounce resize to prevent excessive fit calls that cause terminal corruption
+		let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
 		const handleResize = () => {
-			fitAddon.fit();
+			if (resizeTimeout) {
+				clearTimeout(resizeTimeout);
+			}
+			resizeTimeout = setTimeout(() => {
+				if (!isDisposed) {
+					try {
+						fitAddon.fit();
+					} catch (e) {
+						console.warn("Resize fit failed:", e);
+					}
+				}
+				resizeTimeout = null;
+			}, 100);
 		};
 		window.addEventListener("resize", handleResize);
 
@@ -198,8 +226,41 @@ export default function TerminalComponent({
 		window.ipcRenderer.on("terminal-on-data", terminalDataListener);
 
 		const cleanup = () => {
+			isDisposed = true;
+
+			// Clear any pending resize timeout
+			if (resizeTimeout) {
+				clearTimeout(resizeTimeout);
+				resizeTimeout = null;
+			}
+
 			window.ipcRenderer.off("terminal-on-data", terminalDataListener);
 			window.removeEventListener("resize", handleResize);
+
+			// Dispose addons before terminal
+			try {
+				fitAddon.dispose();
+			} catch (e) {
+				console.warn("FitAddon disposal failed:", e);
+			}
+			try {
+				searchAddon.dispose();
+			} catch (e) {
+				console.warn("SearchAddon disposal failed:", e);
+			}
+			try {
+				webLinksAddon.dispose();
+			} catch (e) {
+				console.warn("WebLinksAddon disposal failed:", e);
+			}
+			if (webglAddon) {
+				try {
+					webglAddon.dispose();
+				} catch (e) {
+					console.warn("WebglAddon disposal failed:", e);
+				}
+			}
+
 			if (terminalIdRef.current) {
 				window.ipcRenderer.send("terminal-kill", terminalIdRef.current);
 			}
