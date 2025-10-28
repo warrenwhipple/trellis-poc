@@ -98,7 +98,7 @@ export default function TerminalComponent({
 			setTerminal(null);
 			cleanup();
 		};
-	}, [theme]);
+	}, [theme, terminalId]);
 
 	function initTerminal(
 		container: HTMLDivElement,
@@ -286,9 +286,8 @@ export default function TerminalComponent({
 				}
 			}
 
-			if (terminalIdRef.current) {
-				window.ipcRenderer.send("terminal-kill", terminalIdRef.current);
-			}
+			// Terminal lifecycle is now managed by TerminalLayout
+			// Don't kill the terminal here
 		};
 
 		return { term, terminalDataListener, cleanup };
