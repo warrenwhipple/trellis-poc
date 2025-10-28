@@ -83,7 +83,7 @@ export default function TerminalComponent({
 	}, [theme, terminal]);
 
 	useEffect(() => {
-		if (!terminalRef.current || terminal) {
+		if (!terminalRef.current || terminal || !terminalId) {
 			return;
 		}
 
@@ -286,8 +286,8 @@ export default function TerminalComponent({
 				}
 			}
 
-			// Terminal lifecycle is now managed by TerminalLayout
-			// Don't kill the terminal here
+			// Terminal process lifecycle is managed by TerminalLayout
+			// Don't kill it here to avoid conflicts
 		};
 
 		return { term, terminalDataListener, cleanup };
