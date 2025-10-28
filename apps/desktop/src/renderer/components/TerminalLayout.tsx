@@ -42,20 +42,12 @@ function TerminalInstance({
 				const initialCwd = terminal.cwd || workingDirectory;
 
 				if (!initialCwd) {
-					console.error("[TerminalLayout] No CWD available!", {
-						terminalId: terminal.id,
-						terminalCwd: terminal.cwd,
-						workingDirectory,
-					});
+					console.error(
+						"[TerminalLayout] No CWD available for terminal",
+						terminal.id,
+					);
 					return;
 				}
-
-				console.log("[TerminalLayout] Creating terminal:", {
-					terminalId: terminal.id,
-					terminalCwd: terminal.cwd,
-					workingDirectory,
-					initialCwd,
-				});
 
 				terminalCreatedRef.current = true;
 
@@ -95,8 +87,6 @@ function TerminalInstance({
 		const handleCwdChange = async (data: { id: string; cwd: string }) => {
 			// Only handle changes for this terminal
 			if (data.id !== terminalId) return;
-
-			console.log(`[Terminal ${terminal.id}] CWD changed to:`, data.cwd);
 
 			// Save the new CWD to the workspace config
 			try {
