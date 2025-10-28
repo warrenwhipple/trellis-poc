@@ -345,6 +345,48 @@ class WorkspaceManager {
 	}
 
 	/**
+	 * Update terminal CWD in a screen
+	 */
+	updateTerminalCwd(
+		workspaceId: string,
+		worktreeId: string,
+		screenId: string,
+		terminalId: string,
+		cwd: string,
+	): boolean {
+		try {
+			const config = configManager.read();
+			const workspace = config.workspaces.find((ws) => ws.id === workspaceId);
+			if (!workspace) return false;
+
+			const worktree = workspace.worktrees.find((wt) => wt.id === worktreeId);
+			if (!worktree) return false;
+
+			const screen = worktree.screens.find((s) => s.id === screenId);
+			if (!screen) return false;
+
+			const terminal = screen.layout.terminals.find((t) => t.id === terminalId);
+			if (!terminal) return false;
+
+			// Update CWD
+			terminal.cwd = cwd;
+			workspace.updatedAt = new Date().toISOString();
+
+			// Save to config
+			const index = config.workspaces.findIndex((ws) => ws.id === workspaceId);
+			if (index !== -1) {
+				config.workspaces[index] = workspace;
+				return configManager.write(config);
+			}
+
+			return false;
+		} catch (error) {
+			console.error("Failed to update terminal CWD:", error);
+			return false;
+		}
+	}
+
+	/**
 	 * Scan and import existing git worktrees for a workspace
 	 */
 	async scanAndImportWorktrees(

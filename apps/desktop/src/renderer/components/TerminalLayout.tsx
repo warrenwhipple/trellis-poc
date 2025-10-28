@@ -1,29 +1,58 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GridLayout, GridTerminal } from "shared/types";
 import Terminal from "./Terminal";
 
 interface TerminalLayoutProps {
 	layout: GridLayout;
 	workingDirectory: string;
+	workspaceId?: string;
+	worktreeId?: string;
+	screenId?: string;
 }
 
 interface TerminalInstanceProps {
 	terminal: GridTerminal;
 	workingDirectory: string;
+	workspaceId?: string;
+	worktreeId?: string;
+	screenId?: string;
 }
 
 function TerminalInstance({
 	terminal,
 	workingDirectory,
+	workspaceId,
+	worktreeId,
+	screenId,
 }: TerminalInstanceProps) {
 	const [terminalId, setTerminalId] = useState<string | null>(null);
+	const terminalCreatedRef = useRef(false);
 
 	useEffect(() => {
+		// Prevent double creation - only create once per terminal.id
+		if (terminalCreatedRef.current) {
+			return;
+		}
+
 		// Create terminal instance
 		const createTerminal = async () => {
 			try {
+				// Use saved CWD if available, otherwise use workingDirectory
+				// Ensure we always have a valid directory
+				const initialCwd = terminal.cwd || workingDirectory;
+
+				if (!initialCwd) {
+					console.error(
+						"[TerminalLayout] No CWD available for terminal",
+						terminal.id,
+					);
+					return;
+				}
+
+				terminalCreatedRef.current = true;
+
 				const id = await window.ipcRenderer.invoke<string>("terminal-create", {
-					cwd: workingDirectory,
+					cwd: initialCwd,
 				});
 				setTerminalId(id);
 
@@ -49,11 +78,40 @@ function TerminalInstance({
 				window.ipcRenderer.invoke("terminal-kill", terminalId);
 			}
 		};
-	}, [workingDirectory, terminal.command]);
+	}, [workingDirectory, terminal.command, terminal.cwd, terminal.id]);
+
+	// Listen for CWD changes from the main process
+	useEffect(() => {
+		if (!terminalId || !workspaceId || !worktreeId || !screenId) return;
+
+		const handleCwdChange = async (data: { id: string; cwd: string }) => {
+			// Only handle changes for this terminal
+			if (data.id !== terminalId) return;
+
+			// Save the new CWD to the workspace config
+			try {
+				await window.ipcRenderer.invoke("workspace-update-terminal-cwd", {
+					workspaceId,
+					worktreeId,
+					screenId,
+					terminalId: terminal.id,
+					cwd: data.cwd,
+				});
+			} catch (error) {
+				console.error("Failed to save terminal CWD:", error);
+			}
+		};
+
+		window.ipcRenderer.on("terminal-cwd-changed", handleCwdChange);
+
+		return () => {
+			window.ipcRenderer.off("terminal-cwd-changed", handleCwdChange);
+		};
+	}, [terminalId, terminal.id, workspaceId, worktreeId, screenId]);
 
 	return (
 		<div className="w-full h-full">
-			<Terminal />
+			<Terminal terminalId={terminalId} />
 		</div>
 	);
 }
@@ -61,6 +119,9 @@ function TerminalInstance({
 export default function TerminalLayout({
 	layout,
 	workingDirectory,
+	workspaceId,
+	worktreeId,
+	screenId,
 }: TerminalLayoutProps) {
 	// Safety check: ensure layout has the expected structure
 	if (!layout || !layout.terminals || !Array.isArray(layout.terminals)) {
@@ -97,6 +158,9 @@ export default function TerminalLayout({
 					<TerminalInstance
 						terminal={terminal}
 						workingDirectory={workingDirectory}
+						workspaceId={workspaceId}
+						worktreeId={worktreeId}
+						screenId={screenId}
 					/>
 				</div>
 			))}
