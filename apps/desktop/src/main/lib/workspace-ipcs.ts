@@ -135,4 +135,27 @@ export function registerWorkspaceIPCs() {
 			return await workspaceManager.scanAndImportWorktrees(workspaceId);
 		},
 	);
+
+	// Update terminal CWD
+	ipcMain.handle(
+		"workspace-update-terminal-cwd",
+		async (
+			_event,
+			params: {
+				workspaceId: string;
+				worktreeId: string;
+				screenId: string;
+				terminalId: string;
+				cwd: string;
+			},
+		) => {
+			return workspaceManager.updateTerminalCwd(
+				params.workspaceId,
+				params.worktreeId,
+				params.screenId,
+				params.terminalId,
+				params.cwd,
+			);
+		},
+	);
 }

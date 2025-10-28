@@ -9,6 +9,7 @@ export function registerTerminalIPCs(mainWindow: BrowserWindow) {
 	ipcMain.handle(
 		"terminal-create",
 		async (_event, options: { cols?: number; rows?: number; cwd?: string }) => {
+			console.log("[IPC] terminal-create received:", options);
 			return await terminalManager.create(options);
 		},
 	);
@@ -45,6 +46,16 @@ export function registerTerminalIPCs(mainWindow: BrowserWindow) {
 	// Get terminal history
 	ipcMain.handle("terminal-get-history", (_event, id: string) => {
 		return terminalManager.getHistory(id);
+	});
+
+	// Get terminal CWD
+	ipcMain.handle("terminal-get-cwd", (_event, id: string) => {
+		return terminalManager.getCwd(id);
+	});
+
+	// Set terminal CWD (for restoration)
+	ipcMain.on("terminal-set-cwd", (_event, message: { id: string; cwd: string }) => {
+		terminalManager.setCwd(message.id, message.cwd);
 	});
 
 	// Open external URLs

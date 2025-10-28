@@ -25,6 +25,7 @@ export interface GridTerminal {
 	col: number;
 	rowSpan?: number;
 	colSpan?: number;
+	cwd?: string | null; // Current working directory for this terminal
 }
 
 export interface GridLayout {

@@ -217,10 +217,13 @@ export function MainScreen() {
 						</div>
 					)}
 
-					{!loading && !error && selectedScreen && selectedWorktree && (
+					{!loading && !error && selectedScreen && selectedWorktree && currentWorkspace && (
 						<TerminalLayout
 							layout={selectedScreen.layout}
-							workingDirectory={selectedWorktree.path}
+							workingDirectory={selectedWorktree.path || currentWorkspace.repoPath}
+							workspaceId={currentWorkspace.id}
+							worktreeId={selectedWorktreeId ?? undefined}
+							screenId={selectedScreenId ?? undefined}
 						/>
 					)}
 				</div>

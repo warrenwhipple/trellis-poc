@@ -7,6 +7,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 
 interface TerminalProps {
+	terminalId?: string | null;
 	hidden?: boolean;
 	className?: string;
 }
@@ -65,6 +66,7 @@ const TERMINAL_THEME: Record<"LIGHT" | "DARK", ITheme> = {
 };
 
 export default function TerminalComponent({
+	terminalId,
 	hidden = false,
 	className = "",
 }: TerminalProps) {
@@ -200,25 +202,22 @@ export default function TerminalComponent({
 		// Also listen for window resize as fallback
 		window.addEventListener("resize", handleResize);
 
-		const { cols, rows } = term;
+		// Use the provided terminalId from props
+		if (terminalId) {
+			terminalIdRef.current = terminalId;
 
-		// Request a new terminal session
-		window.ipcRenderer
-			.invoke("terminal-create", { cols, rows })
-			.then((terminalId: string) => {
-				terminalIdRef.current = terminalId;
-
-				// Get terminal history
-				return window.ipcRenderer.invoke("terminal-get-history", terminalId);
-			})
-			.then((history: string | undefined) => {
-				if (history) {
-					term.write(history);
-				}
-			})
-			.catch((error: Error) => {
-				console.error("Failed to initialize terminal:", error);
-			});
+			// Get terminal history for existing terminal
+			window.ipcRenderer
+				.invoke("terminal-get-history", terminalId)
+				.then((history: string | undefined) => {
+					if (history) {
+						term.write(history);
+					}
+				})
+				.catch((error: Error) => {
+					console.error("Failed to get terminal history:", error);
+				});
+		}
 
 		// Set up event listeners
 		term.onData((data) => {
