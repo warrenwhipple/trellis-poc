@@ -21,6 +21,7 @@ interface TerminalProps {
 	terminalId?: string | null;
 	hidden?: boolean;
 	className?: string;
+	isSelected?: boolean;
 	onFocus?: () => void;
 }
 
@@ -81,6 +82,7 @@ export default function TerminalComponent({
 	terminalId,
 	hidden = false,
 	className = "",
+	isSelected = true,
 	onFocus,
 }: TerminalProps) {
 	const terminalRef = useRef<HTMLDivElement>(null);
@@ -95,15 +97,15 @@ export default function TerminalComponent({
 		onFocusRef.current = onFocus;
 	}, [onFocus]);
 
-	// Auto-focus terminal when terminalId changes (new tab or switched tab)
+	// Auto-focus terminal when selected (new tab or switched tab)
 	useEffect(() => {
-		if (terminal && terminalId) {
+		if (terminal && terminalId && isSelected) {
 			// Small delay to ensure terminal is fully mounted
 			setTimeout(() => {
 				terminal.focus();
 			}, 50);
 		}
-	}, [terminal, terminalId]);
+	}, [terminal, terminalId, isSelected]);
 
 	useEffect(() => {
 		if (terminal) {
