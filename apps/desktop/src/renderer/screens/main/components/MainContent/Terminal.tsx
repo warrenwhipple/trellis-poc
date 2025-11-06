@@ -205,7 +205,7 @@ export default function TerminalComponent({
 		const fitAddon = new FitAddon();
 		term.loadAddon(fitAddon);
 
-		// Custom fit function that accounts for container dimensions properly
+		// Custom fit function that accounts for container dimensions and padding
 		const customFit = () => {
 			if (isDisposed) return;
 
@@ -219,11 +219,35 @@ export default function TerminalComponent({
 					return; // Skip if container has no dimensions yet
 				}
 
-				// Use proposeDimensions to calculate optimal size without applying it
-				// Then manually resize to ensure PTY gets the correct dimensions
-				const dimensions = fitAddon.proposeDimensions();
-				if (dimensions) {
-					term.resize(dimensions.cols, dimensions.rows);
+				// Account for the 8px padding on .xterm-screen (8px on all sides)
+				// This ensures dimensions are calculated correctly and no partial lines show
+				const PADDING_HORIZONTAL = 16; // 8px left + 8px right
+				const PADDING_VERTICAL = 16; // 8px top + 8px bottom
+
+				// Get the core renderer dimensions (character size)
+				const core = (term as any)._core;
+				if (!core) {
+					// Fallback to default fit if core not available
+					const dimensions = fitAddon.proposeDimensions();
+					if (dimensions) {
+						term.resize(dimensions.cols, dimensions.rows);
+					}
+					return;
+				}
+
+				const cellWidth = core._renderService?.dimensions?.actualCellWidth || 9;
+				const cellHeight =
+					core._renderService?.dimensions?.actualCellHeight || 17;
+
+				// Calculate rows and cols with padding subtracted
+				const availableWidth = width - PADDING_HORIZONTAL;
+				const availableHeight = height - PADDING_VERTICAL;
+
+				const cols = Math.floor(availableWidth / cellWidth);
+				const rows = Math.floor(availableHeight / cellHeight);
+
+				if (cols > 0 && rows > 0) {
+					term.resize(cols, rows);
 				}
 			} catch (e) {
 				console.warn("Custom fit failed:", e);
@@ -243,10 +267,6 @@ export default function TerminalComponent({
 			writeQueue = [];
 			term.write(data);
 		};
-
-		// Perform initial fit to size terminal correctly on first render
-		// This ensures the terminal has correct dimensions when it first appears
-		customFit();
 
 		// Listen for container resize to auto-fit terminal
 		// Use ResizeObserver to detect when the container size changes
@@ -295,27 +315,35 @@ export default function TerminalComponent({
 							JSON.stringify(history.slice(-50)),
 						);
 						// Write history directly - PTY data already has proper formatting
-						term.write(history);
-
-						// Delay initial fit AFTER writing history to prevent resize events
-						// from triggering the shell to redraw the prompt
-						setTimeout(() => {
-							if (!isDisposed) {
-								customFit();
-								// Mark initial setup as complete after first fit
-								isInitialSetup = false;
-							}
-						}, 100);
+						term.write(history, () => {
+							// After history is written, scroll to bottom to show latest content
+							term.scrollToBottom();
+						});
 					}
+
+					// Perform initial fit AFTER history is loaded and written
+					// This prevents the terminal from shifting when reconnecting
+					setTimeout(() => {
+						if (!isDisposed) {
+							customFit();
+							// Ensure we're scrolled to bottom after fit as well
+							term.scrollToBottom();
+							// Mark initial setup as complete after first fit
+							isInitialSetup = false;
+						}
+					}, 100);
 				})
 				.catch((error: Error) => {
 					console.error("Failed to get terminal history:", error);
-					// Mark initial setup as complete even on error
-					isInitialSetup = false;
+					// Still perform initial fit even on error
+					if (!isDisposed) {
+						customFit();
+						isInitialSetup = false;
+					}
 				});
 		} else {
-			// Mark initial setup as complete for new terminals
-			// Initial fit was already performed above
+			// New terminal - perform initial fit immediately
+			customFit();
 			setTimeout(() => {
 				if (!isDisposed) {
 					isInitialSetup = false;
