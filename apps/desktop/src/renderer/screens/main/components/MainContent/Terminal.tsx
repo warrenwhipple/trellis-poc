@@ -97,15 +97,15 @@ export default function TerminalComponent({
 		onFocusRef.current = onFocus;
 	}, [onFocus]);
 
-	// Auto-focus terminal when selected (new tab or switched tab)
-	useEffect(() => {
-		if (terminal && terminalId && isSelected) {
-			// Small delay to ensure terminal is fully mounted
-			setTimeout(() => {
-				terminal.focus();
-			}, 50);
-		}
-	}, [terminal, terminalId, isSelected]);
+	// // Auto-focus terminal when selected (new tab or switched tab)
+	// useEffect(() => {
+	// 	if (terminal && terminalId && isSelected) {
+	// 		// Small delay to ensure terminal is fully mounted
+	// 		setTimeout(() => {
+	// 			terminal?.textarea?.focus();
+	// 		}, 50);
+	// 	}
+	// }, [terminal, terminalId, isSelected]);
 
 	useEffect(() => {
 		if (terminal) {
