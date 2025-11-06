@@ -1235,21 +1235,22 @@ export function MainScreen() {
 						targetIndex: parentGroupTab.tabs?.length || 0,
 					});
 
-					// Update mosaic tree with column direction for vertical split
-					const updatedMosaicTree: MosaicNode<string> =
-						typeof parentGroupTab.mosaicTree === "string"
-							? {
-									direction: "column",
-									first: parentGroupTab.mosaicTree,
-									second: newTab.id,
-									splitPercentage: 50,
-								}
-							: {
-									direction: "column",
-									first: parentGroupTab.mosaicTree,
-									second: newTab.id,
-									splitPercentage: 50,
-								};
+					const first = parentGroupTab.mosaicTree;
+
+          if (!first) {
+            console.error(
+              "Failed to create vertical split: parentGroupTab.mosaicTree is undefined"
+            );
+            return;
+          }
+
+          // Update mosaic tree with column direction for vertical split
+          const updatedMosaicTree: MosaicNode<string> = {
+            direction: "column",
+            first,
+            second: newTab.id,
+            splitPercentage: 50,
+          } satisfies MosaicNode<string>;
 
 					await window.ipcRenderer.invoke("tab-update-mosaic-tree", {
 						workspaceId: currentWorkspace.id,
@@ -1490,7 +1491,7 @@ export function MainScreen() {
 									updatedGroupTab.tabs.length - 1,
 								);
 								handleTabSelect(
-									savedWorktreeId,
+									selectedWorktreeId,
 									updatedGroupTab.tabs[newIndex].id,
 								);
 							} else {
@@ -1504,7 +1505,7 @@ export function MainScreen() {
 								updatedWorktree.tabs.length - 1,
 							);
 							handleTabSelect(
-								savedWorktreeId,
+								selectedWorktreeId,
 								updatedWorktree.tabs[newIndex].id,
 							);
 						} else {
