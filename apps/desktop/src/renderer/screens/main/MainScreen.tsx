@@ -1141,18 +1141,40 @@ export function MainScreen() {
 		const tabShortcuts = createTabShortcuts({
 			switchToPrevTab: () => {
 				if (!selectedWorktree || !selectedTabId) return;
-				const tabs = selectedWorktree.tabs;
-				const currentIndex = tabs.findIndex((t) => t.id === selectedTabId);
-				if (currentIndex > 0) {
-					handleTabSelect(selectedWorktree.id, tabs[currentIndex - 1].id);
+
+				// If we're inside a group tab, navigate between group's children
+				if (parentGroupTab && parentGroupTab.tabs) {
+					const tabs = parentGroupTab.tabs;
+					const currentIndex = tabs.findIndex((t) => t.id === selectedTabId);
+					if (currentIndex > 0) {
+						handleTabSelect(selectedWorktree.id, tabs[currentIndex - 1].id);
+					}
+				} else {
+					// Navigate between top-level tabs
+					const tabs = selectedWorktree.tabs;
+					const currentIndex = tabs.findIndex((t) => t.id === selectedTabId);
+					if (currentIndex > 0) {
+						handleTabSelect(selectedWorktree.id, tabs[currentIndex - 1].id);
+					}
 				}
 			},
 			switchToNextTab: () => {
 				if (!selectedWorktree || !selectedTabId) return;
-				const tabs = selectedWorktree.tabs;
-				const currentIndex = tabs.findIndex((t) => t.id === selectedTabId);
-				if (currentIndex < tabs.length - 1) {
-					handleTabSelect(selectedWorktree.id, tabs[currentIndex + 1].id);
+
+				// If we're inside a group tab, navigate between group's children
+				if (parentGroupTab && parentGroupTab.tabs) {
+					const tabs = parentGroupTab.tabs;
+					const currentIndex = tabs.findIndex((t) => t.id === selectedTabId);
+					if (currentIndex < tabs.length - 1) {
+						handleTabSelect(selectedWorktree.id, tabs[currentIndex + 1].id);
+					}
+				} else {
+					// Navigate between top-level tabs
+					const tabs = selectedWorktree.tabs;
+					const currentIndex = tabs.findIndex((t) => t.id === selectedTabId);
+					if (currentIndex < tabs.length - 1) {
+						handleTabSelect(selectedWorktree.id, tabs[currentIndex + 1].id);
+					}
 				}
 			},
 			newTab: async () => {
