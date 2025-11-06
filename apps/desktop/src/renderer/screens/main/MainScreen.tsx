@@ -1202,6 +1202,8 @@ export function MainScreen() {
 
 						if (refreshedWorkspace) {
 							setCurrentWorkspace(refreshedWorkspace);
+							// Also refresh workspaces list for sidebar
+							await loadAllWorkspaces();
 						}
 					} else {
 						console.error("Failed to create tab:", result.error);
