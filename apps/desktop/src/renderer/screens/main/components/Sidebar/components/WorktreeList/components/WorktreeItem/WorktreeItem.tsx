@@ -11,6 +11,9 @@ import {
 	ContextMenuContent,
 	ContextMenuItem,
 	ContextMenuSeparator,
+	ContextMenuSub,
+	ContextMenuSubContent,
+	ContextMenuSubTrigger,
 	ContextMenuTrigger,
 } from "@superset/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@superset/ui/tooltip";
@@ -28,7 +31,7 @@ import {
 	Star,
 	Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { MosaicNode } from "react-mosaic-component";
 import {
 	Dialog,
@@ -210,13 +213,12 @@ function DroppableGroupTab({
 					<button
 						type="button"
 						onClick={handleClick}
-						className={`group flex items-center gap-1 w-full h-8 px-3 text-sm rounded-md [transition:all_0.2s,border_0s] ${
-							isSelected
+						className={`group flex items-center gap-1 w-full h-8 px-3 text-sm rounded-md [transition:all_0.2s,border_0s] ${isSelected
 								? "bg-neutral-800 border border-neutral-700"
 								: isOver
 									? "bg-blue-900/50 border border-blue-500"
 									: "hover:bg-neutral-800/50"
-						}`}
+							}`}
 						style={{ paddingLeft: `${level * 12 + 12}px` }}
 					>
 						<ChevronRight
@@ -275,9 +277,8 @@ function DroppableGroupArea({
 	return (
 		<div
 			ref={setNodeRef}
-			className={`relative ${
-				isOver ? "bg-blue-900/20 border-l-2 border-blue-500 rounded-r-md" : ""
-			}`}
+			className={`relative ${isOver ? "bg-blue-900/20 border-l-2 border-blue-500 rounded-r-md" : ""
+				}`}
 			style={{
 				minHeight: "40px",
 				transition: "all 0.2s",
@@ -760,7 +761,7 @@ export function WorktreeItem({
 			setErrorTitle("Failed to Remove Worktree");
 			setErrorMessage(
 				result.error ||
-					"An unknown error occurred while removing the worktree.",
+				"An unknown error occurred while removing the worktree.",
 			);
 			setShowErrorDialog(true);
 		}
@@ -903,7 +904,7 @@ export function WorktreeItem({
 			setErrorTitle("Failed to Check Settings");
 			setErrorMessage(
 				checkResult.error ||
-					"An unknown error occurred while checking settings.",
+				"An unknown error occurred while checking settings.",
 			);
 			setShowErrorDialog(true);
 			return;
@@ -1197,24 +1198,30 @@ export function WorktreeItem({
 						</TooltipTrigger>
 					</ContextMenuTrigger>
 					<ContextMenuContent>
-						<ContextMenuItem onClick={onCloneWorktree}>
-							<GitBranch size={14} className="mr-2" />
-							Clone Worktree...
-						</ContextMenuItem>
+						<ContextMenuSub>
+							<ContextMenuSubTrigger>
+								<GitBranch size={14} className="mr-2" />
+								Git
+							</ContextMenuSubTrigger>
+							<ContextMenuSubContent>
+								<ContextMenuItem onClick={onCloneWorktree}>
+									<GitBranch size={14} className="mr-2" />
+									Clone
+								</ContextMenuItem>
+								<ContextMenuItem
+									onClick={handleMergeWorktree}
+									disabled={isMergeDisabled}
+								>
+									<GitMerge size={14} className="mr-2" />
+									{isMergeDisabled ? `Merge (${mergeDisabledReason})` : "Merge"}
+								</ContextMenuItem>
+								<ContextMenuItem onClick={() => setShowGitStatusDialog(true)}>
+									<GitBranch size={14} className="mr-2" />
+									Status
+								</ContextMenuItem>
+							</ContextMenuSubContent>
+						</ContextMenuSub>
 						<ContextMenuSeparator />
-						<ContextMenuItem
-							onClick={handleMergeWorktree}
-							disabled={isMergeDisabled}
-						>
-							<GitMerge size={14} className="mr-2" />
-							{isMergeDisabled
-								? `Merge Worktree (${mergeDisabledReason})`
-								: "Merge Worktree..."}
-						</ContextMenuItem>
-						<ContextMenuItem onClick={() => setShowGitStatusDialog(true)}>
-							<GitBranch size={14} className="mr-2" />
-							Git Status
-						</ContextMenuItem>
 						<ContextMenuItem onClick={handleCopyPath}>
 							<Clipboard size={14} className="mr-2" />
 							Copy Path
@@ -1338,7 +1345,7 @@ export function WorktreeItem({
 							Target Branch
 						</label>
 						<select
-							id="target-branch"
+							id={useId()}
 							value={targetWorktreeId}
 							onChange={(e) => handleTargetWorktreeChange(e.target.value)}
 							className="w-full px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-md text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"

@@ -292,15 +292,6 @@ export function MainScreen() {
 
 			if (result.success && result.imported && result.imported > 0) {
 				console.log("[MainScreen] Imported worktrees:", result.imported);
-				// Refresh workspace data
-				const refreshedWorkspace = await window.ipcRenderer.invoke(
-					"workspace-get",
-					workspaceId,
-				);
-
-				if (refreshedWorkspace) {
-					setCurrentWorkspace(refreshedWorkspace);
-				}
 			}
 		} catch (error) {
 			console.error("[MainScreen] Failed to scan worktrees:", error);
@@ -367,17 +358,24 @@ export function MainScreen() {
 	useEffect(() => {
 		const handler = async (workspace: Workspace) => {
 			console.log("[MainScreen] Workspace opened event received:", workspace);
-			setCurrentWorkspace(workspace);
 			setLoading(false);
 			// Persist the active workspace
 			await window.ipcRenderer.invoke(
 				"workspace-set-active-workspace-id",
 				workspace.id,
 			);
-			// Refresh workspaces list
-			await loadAllWorkspaces();
-			// Scan for existing worktrees
+			// Scan for existing worktrees FIRST
 			await scanWorktrees(workspace.id);
+			// Refresh workspaces list (after scanning to get updated worktrees)
+			await loadAllWorkspaces();
+			// Fetch the updated workspace after scanning (this includes imported worktrees)
+			const refreshedWorkspace = await window.ipcRenderer.invoke(
+				"workspace-get",
+				workspace.id,
+			);
+			if (refreshedWorkspace) {
+				setCurrentWorkspace(refreshedWorkspace);
+			}
 		};
 
 		console.log("[MainScreen] Setting up workspace-opened listener");
@@ -1635,7 +1633,12 @@ export function MainScreen() {
 									onWorkspaceSelect={handleWorkspaceSelect}
 									onUpdateWorktree={handleUpdateWorktree}
 									selectedTabId={selectedTabId ?? undefined}
-									onCollapse={() => setIsSidebarOpen(false)}
+									onCollapse={() => {
+									const panel = sidebarPanelRef.current;
+									if (panel && !panel.isCollapsed()) {
+										panel.collapse();
+									}
+								}}
 									isDragging={!!activeId}
 								/>
 							)}
@@ -1645,12 +1648,17 @@ export function MainScreen() {
 						<ResizablePanel minSize={30}>
 							<div className="flex flex-col h-full overflow-hidden">
 								{/* Top Bar */}
-								{/* <TopBar
-							isSidebarOpen={isSidebarOpen}
-							onOpenSidebar={() => setIsSidebarOpen(true)}
-							workspaceName={currentWorkspace?.name}
-							currentBranch={currentWorkspace?.branch}
-						/> */}
+								<TopBar
+									isSidebarOpen={isSidebarOpen}
+									onOpenSidebar={() => {
+										const panel = sidebarPanelRef.current;
+										if (panel && panel.isCollapsed()) {
+											panel.expand();
+										}
+									}}
+									workspaceName={currentWorkspace?.name}
+									currentBranch={currentWorkspace?.branch}
+								/>
 
 								{/* Content Area */}
 								<DroppableMainContent isOver={isOverMainContent}>
@@ -1692,7 +1700,7 @@ export function MainScreen() {
 										/>
 									) : (
 										// Base level tab (not inside a group) → display full width/height
-										<div className="w-full h-full">
+										<div className="w-full h-full p-2 bg-[#1e1e1e]">
 											<TabContent
 												tab={selectedTab}
 												workingDirectory={
