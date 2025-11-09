@@ -20,18 +20,20 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type { ImperativePanelHandle } from "react-resizable-panels";
 import type { MosaicNode, Tab, TabType, Workspace } from "shared/types";
+import { createShortcutHandler } from "../../lib/keyboard-shortcuts";
+import {
+	createTabShortcuts,
+	createWorkspaceShortcuts,
+} from "../../lib/shortcuts";
 import { AppFrame } from "./components/AppFrame";
 import { Background } from "./components/Background";
 import TabContent from "./components/MainContent/TabContent";
 import TabGroup from "./components/MainContent/TabGroup";
+import { NewLayoutMain } from "./components/NewLayout/NewLayoutMain";
 import { PlaceholderState } from "./components/PlaceholderState";
 import { Sidebar } from "./components/Sidebar";
+import { DiffTab } from "./components/TabContent/components/DiffTab";
 import { TopBar } from "./components/TopBar";
-import { createShortcutHandler } from "../../lib/keyboard-shortcuts";
-import {
-	createWorkspaceShortcuts,
-	createTabShortcuts,
-} from "../../lib/shortcuts";
 
 // Droppable wrapper for main content area
 function DroppableMainContent({
@@ -51,9 +53,8 @@ function DroppableMainContent({
 	return (
 		<div
 			ref={setNodeRef}
-			className={`flex-1 overflow-hidden m-1 rounded-lg relative ${
-				isOver ? "ring-2 ring-blue-500 ring-inset" : ""
-			}`}
+			className={`flex-1 overflow-hidden m-1 rounded-lg relative ${isOver ? "ring-2 ring-blue-500 ring-inset" : ""
+				}`}
 		>
 			{children}
 			{isOver && (
@@ -68,6 +69,12 @@ function DroppableMainContent({
 }
 
 export function MainScreen() {
+	// Use the new layout by default
+	return <NewLayoutMain />;
+}
+
+export function OldMainScreen() {
+	// Otherwise, render the original layout
 	const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 	const [showSidebarOverlay, setShowSidebarOverlay] = useState(false);
 	const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
@@ -82,12 +89,20 @@ export function MainScreen() {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 
+	// Diff view state
+	const [showDiffView, setShowDiffView] = useState(false);
+	const [diffWorktreeId, setDiffWorktreeId] = useState<string | null>(null);
+
 	// Drag and drop state
 	const [activeId, setActiveId] = useState<string | null>(null);
 	const [isOverMainContent, setIsOverMainContent] = useState(false);
 
 	const selectedWorktree = currentWorkspace?.worktrees?.find(
 		(wt) => wt.id === selectedWorktreeId,
+	);
+
+	const diffWorktree = currentWorkspace?.worktrees?.find(
+		(wt) => wt.id === diffWorktreeId,
 	);
 
 	// Helper: Create a new tab
@@ -110,6 +125,85 @@ export function MainScreen() {
 		}
 
 		return result.tab;
+	};
+
+	// Helper: Show diff view for a worktree - now creates a tab
+	const handleShowDiffView = async (worktreeId: string) => {
+		if (!currentWorkspace) return;
+
+		// Find the worktree
+		const worktree = currentWorkspace.worktrees?.find(
+			(wt) => wt.id === worktreeId,
+		);
+		if (!worktree) return;
+
+		// Check if a diff tab already exists for this worktree
+		const existingDiffTab = worktree.tabs?.find((tab) => tab.type === "diff");
+
+		if (existingDiffTab) {
+			// If a diff tab already exists, just select it
+			await window.ipcRenderer.invoke("workspace-set-active-selection", {
+				workspaceId: currentWorkspace.id,
+				worktreeId: worktreeId,
+				tabId: existingDiffTab.id,
+			});
+
+			// Reload the workspace to get the updated state
+			const updatedWorkspace = await window.ipcRenderer.invoke(
+				"workspace-get",
+				currentWorkspace.id,
+			);
+			if (updatedWorkspace) {
+				setCurrentWorkspace(updatedWorkspace);
+			}
+
+			// Update the workspaces array
+			await loadAllWorkspaces();
+
+			// Set state to select the tab
+			setSelectedWorktreeId(worktreeId);
+			setSelectedTabId(existingDiffTab.id);
+			return;
+		}
+
+		// Create a new diff tab
+		const result = await window.ipcRenderer.invoke("tab-create", {
+			workspaceId: currentWorkspace.id,
+			worktreeId: worktreeId,
+			name: `Changes – ${worktree.branch}`,
+			type: "diff",
+		});
+
+		if (result.success && result.tab) {
+			// Set active selection in backend first
+			await window.ipcRenderer.invoke("workspace-set-active-selection", {
+				workspaceId: currentWorkspace.id,
+				worktreeId: worktreeId,
+				tabId: result.tab.id,
+			});
+
+			// Reload the workspace to get the updated state with the new tab
+			const updatedWorkspace = await window.ipcRenderer.invoke(
+				"workspace-get",
+				currentWorkspace.id,
+			);
+			if (updatedWorkspace) {
+				setCurrentWorkspace(updatedWorkspace);
+			}
+
+			// Update the workspaces array
+			await loadAllWorkspaces();
+
+			// Set state to select the new tab
+			setSelectedWorktreeId(worktreeId);
+			setSelectedTabId(result.tab.id);
+		}
+	};
+
+	// Helper: Close diff view (legacy - can be removed if not used elsewhere)
+	const handleCloseDiffView = () => {
+		setShowDiffView(false);
+		setDiffWorktreeId(null);
 	};
 
 	// Configure sensors for drag-and-drop
@@ -1235,20 +1329,20 @@ export function MainScreen() {
 
 					const first = parentGroupTab.mosaicTree;
 
-          if (!first) {
-            console.error(
-              "Failed to create vertical split: parentGroupTab.mosaicTree is undefined"
-            );
-            return;
-          }
+					if (!first) {
+						console.error(
+							"Failed to create vertical split: parentGroupTab.mosaicTree is undefined",
+						);
+						return;
+					}
 
-          // Update mosaic tree with column direction for vertical split
-          const updatedMosaicTree: MosaicNode<string> = {
-            direction: "column",
-            first,
-            second: newTab.id,
-            splitPercentage: 50,
-          } satisfies MosaicNode<string>;
+					// Update mosaic tree with column direction for vertical split
+					const updatedMosaicTree: MosaicNode<string> = {
+						direction: "column",
+						first,
+						second: newTab.id,
+						splitPercentage: 50,
+					} satisfies MosaicNode<string>;
 
 					await window.ipcRenderer.invoke("tab-update-mosaic-tree", {
 						workspaceId: currentWorkspace.id,
@@ -1589,24 +1683,23 @@ export function MainScreen() {
 				)}
 
 				{/* Sidebar overlay when hidden and hovering */}
-				{!isSidebarOpen && showSidebarOverlay && workspaces && (
+				{!isSidebarOpen && showSidebarOverlay && currentWorkspace && (
 					<div
 						className="fixed left-0 top-0 bottom-0 w-80 z-40 animate-in slide-in-from-left duration-200"
 						onMouseLeave={() => setShowSidebarOverlay(false)}
 					>
 						<div className="h-full border-r border-neutral-800 bg-neutral-950/95 backdrop-blur-sm">
 							<Sidebar
-								workspaces={workspaces}
 								currentWorkspace={currentWorkspace}
 								onTabSelect={handleTabSelect}
 								onWorktreeCreated={handleWorktreeCreated}
-								onWorkspaceSelect={handleWorkspaceSelect}
 								onUpdateWorktree={handleUpdateWorktree}
 								selectedTabId={selectedTabId ?? undefined}
 								onCollapse={() => {
 									setShowSidebarOverlay(false);
 								}}
 								isDragging={!!activeId}
+								onShowDiff={handleShowDiffView}
 							/>
 						</div>
 					</div>
@@ -1624,22 +1717,21 @@ export function MainScreen() {
 							onCollapse={() => setIsSidebarOpen(false)}
 							onExpand={() => setIsSidebarOpen(true)}
 						>
-							{isSidebarOpen && workspaces && (
+							{isSidebarOpen && currentWorkspace && (
 								<Sidebar
-									workspaces={workspaces}
 									currentWorkspace={currentWorkspace}
 									onTabSelect={handleTabSelect}
 									onWorktreeCreated={handleWorktreeCreated}
-									onWorkspaceSelect={handleWorkspaceSelect}
 									onUpdateWorktree={handleUpdateWorktree}
 									selectedTabId={selectedTabId ?? undefined}
 									onCollapse={() => {
-									const panel = sidebarPanelRef.current;
-									if (panel && !panel.isCollapsed()) {
-										panel.collapse();
-									}
-								}}
+										const panel = sidebarPanelRef.current;
+										if (panel && !panel.isCollapsed()) {
+											panel.collapse();
+										}
+									}}
 									isDragging={!!activeId}
+									onShowDiff={handleShowDiffView}
 								/>
 							)}
 						</ResizablePanel>
@@ -1656,17 +1748,36 @@ export function MainScreen() {
 											panel.expand();
 										}
 									}}
-									workspaceName={currentWorkspace?.name}
-									currentBranch={currentWorkspace?.branch}
 								/>
 
 								{/* Content Area */}
 								<DroppableMainContent isOver={isOverMainContent}>
-									{loading ||
-									error ||
-									!currentWorkspace ||
-									!selectedTab ||
-									!selectedWorktree ? (
+									{showDiffView &&
+										diffWorktreeId &&
+										diffWorktree &&
+										currentWorkspace ? (
+										// Show diff view
+										<div className="w-full h-full">
+											<DiffTab
+												tab={{
+													id: "temp-diff",
+													name: "Diff View",
+													type: "diff",
+													createdAt: new Date().toISOString(),
+												}}
+												workspaceId={currentWorkspace.id}
+												worktreeId={diffWorktreeId}
+												worktree={diffWorktree}
+												workspaceName={currentWorkspace.name}
+												mainBranch={currentWorkspace.branch}
+												onClose={handleCloseDiffView}
+											/>
+										</div>
+									) : loading ||
+										error ||
+										!currentWorkspace ||
+										!selectedTab ||
+										!selectedWorktree ? (
 										<PlaceholderState
 											loading={loading}
 											error={error}
@@ -1697,6 +1808,8 @@ export function MainScreen() {
 											worktreeId={selectedWorktreeId ?? undefined}
 											selectedTabId={selectedTabId ?? undefined}
 											onTabFocus={handleTabFocus}
+											workspaceName={currentWorkspace.name}
+											mainBranch={currentWorkspace.branch}
 										/>
 									) : (
 										// Base level tab (not inside a group) → display full width/height
@@ -1712,6 +1825,8 @@ export function MainScreen() {
 												groupTabId="" // No parent group
 												selectedTabId={selectedTabId ?? undefined}
 												onTabFocus={handleTabFocus}
+												workspaceName={currentWorkspace.name}
+												mainBranch={currentWorkspace.branch}
 											/>
 										</div>
 									)}

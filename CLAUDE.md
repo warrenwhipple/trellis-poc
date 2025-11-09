@@ -1,3 +1,4 @@
+@AGENTS.md
 # Superset Monorepo Guide
 
 Guidelines for agents and developers working in this repository.

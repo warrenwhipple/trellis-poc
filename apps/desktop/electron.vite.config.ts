@@ -7,7 +7,7 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import injectProcessEnvPlugin from "rollup-plugin-inject-process-env";
 import tsconfigPathsPlugin from "vite-tsconfig-paths";
 import { main, resources } from "./package.json";
-import { settings } from "./src/lib/electron-router-dom";
+import { getPortSync } from "./src/main/lib/port-manager";
 
 // Load .env from monorepo root
 // Use override: true to ensure .env values take precedence over inherited env vars
@@ -49,11 +49,12 @@ export default defineConfig({
 		define: {
 			"process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV),
 			"process.platform": JSON.stringify(process.platform),
+			"import.meta.env.DEV_SERVER_PORT": JSON.stringify(getPortSync()),
 		},
 
 		server: {
-			port: Number(process.env.VITE_DEV_SERVER_PORT) || settings.port,
-			strictPort: true, // Fail if port is already in use
+			port: getPortSync(),
+			strictPort: false, // Allow fallback to next available port
 		},
 
 		plugins: [

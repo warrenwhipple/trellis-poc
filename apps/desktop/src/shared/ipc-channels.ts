@@ -178,6 +178,30 @@ export interface IpcChannels {
 		};
 		response: IpcResponse;
 	};
+	"worktree-get-git-diff": {
+		request: { workspaceId: string; worktreeId: string };
+		response: {
+			success: boolean;
+			diff?: {
+				files: Array<{
+					id: string;
+					fileName: string;
+					filePath: string;
+					status: "added" | "deleted" | "modified" | "renamed";
+					oldPath?: string;
+					additions: number;
+					deletions: number;
+					changes: Array<{
+						type: "added" | "removed" | "modified" | "unchanged";
+						oldLineNumber: number | null;
+						newLineNumber: number | null;
+						content: string;
+					}>;
+				}>;
+			};
+			error?: string;
+		};
+	};
 
 	// Tab operations
 	"tab-create": {
@@ -243,7 +267,7 @@ export interface IpcChannels {
 			rows?: number;
 			cwd?: string;
 		};
-		response: { id: string; pid: number };
+		response: string; // terminal ID
 	};
 	"terminal-execute-command": {
 		request: { id: string; command: string };
@@ -252,6 +276,18 @@ export interface IpcChannels {
 	"terminal-get-history": {
 		request: string; // terminal ID
 		response: string | undefined;
+	};
+	"terminal-resize": {
+		request: { id: string; cols: number; rows: number; seq: number };
+		response: void;
+	};
+	"terminal-signal": {
+		request: { id: string; signal: string };
+		response: void;
+	};
+	"terminal-detach": {
+		request: string; // terminal ID
+		response: void;
 	};
 
 	// Update terminal CWD in workspace config
@@ -352,6 +388,9 @@ export function isValidChannel(channel: string): channel is IpcChannelName {
 		"terminal-create",
 		"terminal-execute-command",
 		"terminal-get-history",
+		"terminal-resize",
+		"terminal-signal",
+		"terminal-detach",
 		"open-external",
 		"workspace-set-ports",
 		"workspace-get-detected-ports",

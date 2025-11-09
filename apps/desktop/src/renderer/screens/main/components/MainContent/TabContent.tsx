@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Tab, Worktree } from "shared/types";
+import { DiffTab } from "../TabContent/components/DiffTab";
 import { PortTab } from "../TabContent/components/PortTab";
 import { PreviewTab } from "../TabContent/components/PreviewTab";
 import TabGroup from "./TabGroup";
@@ -14,6 +15,9 @@ interface TabContentProps {
 	groupTabId: string; // ID of the parent group tab
 	selectedTabId?: string; // Currently selected tab ID
 	onTabFocus: (tabId: string) => void;
+	workspaceName?: string;
+	mainBranch?: string;
+	isVisibleInMosaic?: boolean; // Whether this tab is visible in a mosaic layout
 }
 
 /**
@@ -34,6 +38,9 @@ export default function TabContent({
 	groupTabId,
 	selectedTabId,
 	onTabFocus,
+	workspaceName,
+	mainBranch,
+	isVisibleInMosaic = false,
 }: TabContentProps) {
 	const handleFocus = () => {
 		onTabFocus(tab.id);
@@ -51,6 +58,8 @@ export default function TabContent({
 					worktreeId={worktreeId}
 					selectedTabId={selectedTabId}
 					onTabFocus={onTabFocus}
+					workspaceName={workspaceName}
+					mainBranch={mainBranch}
 				/>
 			);
 
@@ -64,6 +73,7 @@ export default function TabContent({
 					groupTabId={groupTabId}
 					selectedTabId={selectedTabId}
 					onFocus={handleFocus}
+					isVisibleInMosaic={isVisibleInMosaic}
 				/>
 			);
 
@@ -113,6 +123,29 @@ export default function TabContent({
 				</div>
 			);
 
+		case "diff":
+			if (!worktreeId) {
+				return (
+					<PlaceholderContent
+						type="diff"
+						message="Worktree not available"
+						onFocus={handleFocus}
+					/>
+				);
+			}
+			return (
+				<div className="w-full h-full" onClick={handleFocus}>
+					<DiffTab
+						tab={tab}
+						workspaceId={workspaceId}
+						worktreeId={worktreeId}
+						worktree={worktree}
+						workspaceName={workspaceName}
+						mainBranch={mainBranch}
+					/>
+				</div>
+			);
+
 		default:
 			return (
 				<PlaceholderContent
@@ -135,6 +168,7 @@ interface TerminalTabContentProps {
 	groupTabId: string; // ID of the parent group tab
 	selectedTabId?: string; // Currently selected tab ID
 	onFocus: () => void;
+	isVisibleInMosaic?: boolean; // Whether this tab is visible in a mosaic layout
 }
 
 function TerminalTabContent({
@@ -145,61 +179,31 @@ function TerminalTabContent({
 	groupTabId,
 	selectedTabId,
 	onFocus,
+	isVisibleInMosaic = false,
 }: TerminalTabContentProps) {
 	const terminalId = tab.id;
 	const terminalCreatedRef = useRef(false);
 	const isSelected = selectedTabId === tab.id;
+	// Terminal should be visible if it's either selected OR visible in a mosaic layout
+	const isVisible = isSelected || isVisibleInMosaic;
 
 	// Terminal creation and lifecycle
+	// NOTE: Actual terminal-create is now deferred to the Terminal component
+	// so it can pass the correct dimensions when ready
 	useEffect(() => {
-		// Prevent double creation - only create once per tab.id
-		if (terminalCreatedRef.current) {
-			return;
-		}
-
-		terminalCreatedRef.current = true;
-
-		const createTerminal = async () => {
-			try {
-				// Use saved CWD if available, otherwise use workingDirectory
-				const initialCwd = tab.cwd || workingDirectory;
-
-				if (!initialCwd) {
-					console.error(
-						"[TabContent] No CWD available for terminal tab",
-						tab.id,
-					);
-					return;
-				}
-
-				// Pass the stable tab.id as the terminal ID
-				// If terminal already exists in backend, it will reuse it
-				await window.ipcRenderer.invoke("terminal-create", {
+		// Execute startup command if specified (only after terminal is created)
+		if (tab.command && tab.command.trim() !== "" && !terminalCreatedRef.current) {
+			terminalCreatedRef.current = true;
+			const commandToExecute = tab.command;
+			// Wait for terminal to be created and attached
+			setTimeout(() => {
+				window.ipcRenderer.invoke("terminal-execute-command", {
 					id: tab.id,
-					cwd: initialCwd,
+					command: commandToExecute,
 				});
-
-				// Execute startup command if specified
-				if (tab.command && tab.command.trim() !== "") {
-					const commandToExecute = tab.command;
-					setTimeout(() => {
-						window.ipcRenderer.invoke("terminal-execute-command", {
-							id: tab.id,
-							command: commandToExecute,
-						});
-					}, 500); // Small delay to ensure terminal is ready
-				}
-			} catch (error) {
-				console.error("Failed to create terminal:", error);
-			}
-		};
-
-		createTerminal();
-
-		// No cleanup - terminals persist in backend
-		// They're only killed when explicitly removed from config
-		// This prevents terminals from being killed during reordering
-	}, [tab.id]);
+			}, 1000);
+		}
+	}, [tab.id, tab.command]);
 
 	// Listen for CWD changes from the main process
 	useEffect(() => {
@@ -229,13 +233,17 @@ function TerminalTabContent({
 		};
 	}, [terminalId, tab.id, workspaceId, worktreeId]);
 
+	// Use saved CWD if available, otherwise use workingDirectory
+	const terminalCwd = tab.cwd || workingDirectory;
+
 	return (
 		<div className="w-full h-full">
 			<Terminal
 				key={terminalId}
 				terminalId={terminalId}
-				isSelected={isSelected}
+				hidden={!isVisible}
 				onFocus={onFocus}
+				cwd={terminalCwd}
 			/>
 		</div>
 	);

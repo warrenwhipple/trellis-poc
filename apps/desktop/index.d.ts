@@ -1,11 +1,16 @@
 /// <reference types="vite/client" />
 
-import type {
-	DetailedHTMLProps,
-	HTMLAttributes,
-	Ref,
-} from "react";
+import type { DetailedHTMLProps, HTMLAttributes, Ref } from "react";
 import type { WebviewTag } from "electron";
+
+interface ImportMetaEnv {
+	readonly DEV_SERVER_PORT?: string;
+	readonly ENABLE_NEW_UI?: string;
+}
+
+interface ImportMeta {
+	readonly env: ImportMetaEnv;
+}
 
 declare global {
 	namespace JSX {
