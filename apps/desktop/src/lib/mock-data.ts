@@ -131,7 +131,7 @@ export const mockRepository: Repository = {
 	},
 };
 
-// Mock Tasks (SUPER-1 through SUPER-10, all in backlog status)
+// Mock Tasks (SUPER-1 through SUPER-13, all in backlog status)
 export const mockTasks: Task[] = [
 	{
 		id: "550e8400-e29b-41d4-a716-446655440100",
@@ -371,6 +371,85 @@ export const mockTasks: Task[] = [
 		description:
 			"Implement Arc-style keyboard shortcuts for navigation and actions",
 		status: "backlog",
+		repositoryId: SUPERSET_REPO_ID,
+		organizationId: SUPERSET_ORG_ID,
+		assigneeId: SATYA_ID,
+		creatorId: AVI_ID,
+		branch: null,
+		createdAt: baseDate,
+		updatedAt: baseDate,
+		assignee: {
+			id: SATYA_ID,
+			name: "Satya Patel",
+			avatarUrl: "https://avatars.githubusercontent.com/u/14907857?v=4&size=64",
+		},
+		creator: {
+			id: AVI_ID,
+			name: "Avi Peltz",
+			avatarUrl:
+				"https://pbs.twimg.com/profile_images/1971893697186086912/0ItNOuNh_400x400.jpg",
+		},
+	},
+	{
+		id: "550e8400-e29b-41d4-a716-446655440110",
+		slug: "SUPER-11",
+		title: "Add click detection for 3D canvas elements",
+		description:
+			"Implement raycasting click detection in the MeshEditor component to allow users to select 3D shapes by clicking directly on them in the canvas",
+		status: "todo",
+		repositoryId: SUPERSET_REPO_ID,
+		organizationId: SUPERSET_ORG_ID,
+		assigneeId: KIET_ID,
+		creatorId: SATYA_ID,
+		branch: null,
+		createdAt: baseDate,
+		updatedAt: baseDate,
+		assignee: {
+			id: KIET_ID,
+			name: "Kiet Ho",
+			avatarUrl:
+				"https://media.licdn.com/dms/image/v2/D5603AQEnhn5ucqmmHw/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1701803526901?e=1764201600&v=beta&t=qqbdPStnSKalAhqzpqkfX2BFT9YlZNrkvTPvy-IgpO0",
+		},
+		creator: {
+			id: SATYA_ID,
+			name: "Satya Patel",
+			avatarUrl: "https://avatars.githubusercontent.com/u/14907857?v=4&size=64",
+		},
+	},
+	{
+		id: "550e8400-e29b-41d4-a716-446655440111",
+		slug: "SUPER-12",
+		title: "Enhance Hero section with 3D background",
+		description:
+			"Make the ShapeForge hero section more engaging by adding an animated 3D background with floating shapes, similar to the Superset website's LitBackground component",
+		status: "todo",
+		repositoryId: SUPERSET_REPO_ID,
+		organizationId: SUPERSET_ORG_ID,
+		assigneeId: AVI_ID,
+		creatorId: KIET_ID,
+		branch: null,
+		createdAt: baseDate,
+		updatedAt: baseDate,
+		assignee: {
+			id: AVI_ID,
+			name: "Avi Peltz",
+			avatarUrl:
+				"https://pbs.twimg.com/profile_images/1971893697186086912/0ItNOuNh_400x400.jpg",
+		},
+		creator: {
+			id: KIET_ID,
+			name: "Kiet Ho",
+			avatarUrl:
+				"https://media.licdn.com/dms/image/v2/D5603AQEnhn5ucqmmHw/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1701803526901?e=1764201600&v=beta&t=qqbdPStnSKalAhqzpqkfX2BFT9YlZNrkvTPvy-IgpO0",
+		},
+	},
+	{
+		id: "550e8400-e29b-41d4-a716-446655440112",
+		slug: "SUPER-13",
+		title: "Add shape properties panel",
+		description:
+			"Create a properties panel that displays position, scale, and rotation values for the selected shape, with ability to edit values directly",
+		status: "todo",
 		repositoryId: SUPERSET_REPO_ID,
 		organizationId: SUPERSET_ORG_ID,
 		assigneeId: SATYA_ID,
