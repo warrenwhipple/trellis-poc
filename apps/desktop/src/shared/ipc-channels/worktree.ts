@@ -202,4 +202,33 @@ export interface WorktreeChannels {
 			error?: string;
 		};
 	};
+
+	"cloud-sandbox-list": {
+		request: Record<string, never>;
+		response: {
+			success: boolean;
+			sandboxes?: CloudSandbox[];
+			error?: string;
+		};
+	};
+
+	"cloud-sandbox-status": {
+		request: { sandboxId: string };
+		response: {
+			success: boolean;
+			status?: "running" | "stopped" | "error";
+			error?: string;
+		};
+	};
+
+	"worktree-set-cloud-sandbox": {
+		request: {
+			worktreeId: string;
+			cloudSandbox: CloudSandbox | null;
+		};
+		response: {
+			success: boolean;
+			error?: string;
+		};
+	};
 }

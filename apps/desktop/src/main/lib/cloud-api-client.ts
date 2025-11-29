@@ -29,6 +29,15 @@ interface CreateSandboxResponse {
 	claudeHost: string;
 }
 
+interface ListSandboxResponse {
+	id: string;
+	name: string;
+	status: string;
+	websshHost?: string;
+	claudeHost?: string;
+	createdAt: string;
+}
+
 /**
  * Client for interacting with yolocode cloud API
  * Uses GitHub token for authentication
@@ -179,6 +188,85 @@ class CloudApiClient {
 				error: error instanceof Error ? error.message : String(error),
 			};
 		}
+	}
+
+	/**
+	 * List all sandboxes for the current user
+	 */
+	async listSandboxes(): Promise<{
+		success: boolean;
+		sandboxes?: CloudSandbox[];
+		error?: string;
+	}> {
+		const token = this.getGithubToken();
+		if (!token) {
+			return {
+				success: false,
+				error: "GitHub authentication required",
+			};
+		}
+
+		try {
+			const response = await fetch(this.baseUrl, {
+				method: "GET",
+				headers: {
+					Authorization: `Bearer ${token}`,
+				},
+			});
+
+			if (!response.ok) {
+				return {
+					success: false,
+					error: `Failed to list sandboxes: ${response.statusText}`,
+				};
+			}
+
+			const data: ListSandboxResponse[] = await response.json();
+
+			const sandboxes: CloudSandbox[] = data.map((s) => ({
+				id: s.id,
+				name: s.name,
+				status: s.status === "running" ? "running" : "stopped",
+				websshHost: s.websshHost,
+				claudeHost: s.claudeHost?.replace(/https:\/\/\d+-/, (match) =>
+					match.replace(/\d+/, "7030"),
+				),
+				createdAt: s.createdAt,
+			}));
+
+			return { success: true, sandboxes };
+		} catch (error) {
+			console.error("Failed to list sandboxes:", error);
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
+	}
+
+	/**
+	 * Get status of a specific sandbox
+	 */
+	async getSandboxStatus(sandboxId: string): Promise<{
+		success: boolean;
+		status?: "running" | "stopped" | "error";
+		error?: string;
+	}> {
+		const result = await this.listSandboxes();
+		if (!result.success || !result.sandboxes) {
+			return { success: false, error: result.error };
+		}
+
+		const sandbox = result.sandboxes.find((s) => s.id === sandboxId);
+		if (!sandbox) {
+			// Sandbox not found - might have been deleted
+			return { success: true, status: "stopped" };
+		}
+
+		return {
+			success: true,
+			status: sandbox.status as "running" | "stopped",
+		};
 	}
 }
 

@@ -66,6 +66,7 @@ export function CloudWorkspaceButton({ className }: CloudWorkspaceButtonProps) {
 			// 1. Create local workspace first
 			const workspaceResult = await createWorkspace.mutateAsync({ projectId });
 			const workspaceId = workspaceResult.workspace.id;
+			const worktreeId = workspaceResult.workspace.worktreeId;
 
 			// 2. Create cloud sandbox
 			const sandboxName = generateSandboxName();
@@ -81,7 +82,15 @@ export function CloudWorkspaceButton({ className }: CloudWorkspaceButtonProps) {
 
 			const sandbox = result.sandbox;
 
-			// 3. Add two webview tabs: Claude chat (7030) and WebSSH (8888)
+			// 3. Save sandbox to worktree
+			if (sandbox) {
+				await window.ipcRenderer.invoke("worktree-set-cloud-sandbox", {
+					worktreeId,
+					cloudSandbox: sandbox,
+				});
+			}
+
+			// 4. Add two webview tabs: Claude chat (7030) and WebSSH (8888)
 			if (sandbox?.claudeHost) {
 				const claudeUrl = sandbox.claudeHost.startsWith("http")
 					? sandbox.claudeHost
