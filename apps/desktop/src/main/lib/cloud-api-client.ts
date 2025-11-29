@@ -74,6 +74,7 @@ class CloudApiClient {
 				name: params.name,
 				template: "yolocode",
 				githubRepo: params.githubRepo,
+				githubToken: token, // Pass gh token for repo cloning
 				taskDescription: params.taskDescription,
 				envVars: {
 					...params.envVars,
