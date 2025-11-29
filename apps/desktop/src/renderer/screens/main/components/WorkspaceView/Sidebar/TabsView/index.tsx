@@ -1,9 +1,9 @@
 import { Button } from "@superset/ui/button";
 import { LayoutGroup, motion } from "framer-motion";
 import { useMemo, useState } from "react";
-import { HiMiniCloud, HiMiniPlus } from "react-icons/hi2";
+import { HiMiniCloud, HiMiniCommandLine, HiMiniPlus } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
-import { useAddTab, useTabs } from "renderer/stores";
+import { TabType, useAddTab, useTabs } from "renderer/stores";
 import { TabItem } from "./TabItem";
 import { UngroupDropZone } from "./UngroupDropZone";
 
@@ -33,60 +33,96 @@ export function TabsView() {
 		}
 	};
 
+	const generateSandboxName = () => {
+		const adjectives = [
+			"happy",
+			"sleepy",
+			"brave",
+			"clever",
+			"gentle",
+			"bright",
+			"calm",
+			"bold",
+			"swift",
+			"quiet",
+		];
+		const nouns = [
+			"cat",
+			"fox",
+			"owl",
+			"bear",
+			"wolf",
+			"deer",
+			"hawk",
+			"lynx",
+			"seal",
+			"dove",
+		];
+		const randomAdj = adjectives[Math.floor(Math.random() * adjectives.length)];
+		const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
+		const timestamp = Date.now().toString(36);
+		return `${randomAdj}-${randomNoun}-${timestamp}`;
+	};
+
+	const createCloudSandbox = async () => {
+		if (!activeWorkspace) return null;
+
+		const sandboxName = generateSandboxName();
+
+		const result = await window.ipcRenderer.invoke("cloud-sandbox-create", {
+			name: sandboxName,
+			projectId: activeWorkspace.projectId,
+			taskDescription: `Cloud development for ${activeWorkspace.name}`,
+		});
+
+		if (!result.success) {
+			throw new Error(result.error || "Unknown error");
+		}
+
+		return result.sandbox;
+	};
+
+	const handleAddCloudChat = async () => {
+		if (!activeWorkspace) return;
+
+		setIsCreatingCloud(true);
+		try {
+			const sandbox = await createCloudSandbox();
+			if (sandbox?.claudeHost) {
+				// Create WebView tab for Claude chat UI (port 7030)
+				const claudeUrl = sandbox.claudeHost.startsWith("http")
+					? sandbox.claudeHost
+					: `https://${sandbox.claudeHost}`;
+				addTab(activeWorkspace.id, TabType.WebView, {
+					url: claudeUrl,
+					title: `Cloud: ${sandbox.name}`,
+				});
+			}
+		} catch (error) {
+			console.error("Error creating cloud chat:", error);
+			alert(
+				`Error creating cloud chat: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		} finally {
+			setIsCreatingCloud(false);
+		}
+	};
+
 	const handleAddCloudTerminal = async () => {
 		if (!activeWorkspace) return;
 
 		setIsCreatingCloud(true);
 		try {
-			// Generate random two-word name for cloud sandbox
-			const adjectives = [
-				"happy",
-				"sleepy",
-				"brave",
-				"clever",
-				"gentle",
-				"bright",
-				"calm",
-				"bold",
-				"swift",
-				"quiet",
-			];
-			const nouns = [
-				"cat",
-				"fox",
-				"owl",
-				"bear",
-				"wolf",
-				"deer",
-				"hawk",
-				"lynx",
-				"seal",
-				"dove",
-			];
-			const randomAdj =
-				adjectives[Math.floor(Math.random() * adjectives.length)];
-			const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
-			const timestamp = Date.now().toString(36);
-			const sandboxName = `${randomAdj}-${randomNoun}-${timestamp}`;
-
-			// Create cloud sandbox
-			const result = await window.ipcRenderer.invoke("cloud-sandbox-create", {
-				name: sandboxName,
-				projectId: activeWorkspace.projectId,
-				taskDescription: `Cloud development for ${activeWorkspace.name}`,
-			});
-
-			if (result.success && result.sandbox?.claudeHost) {
-				// Open the Claude host URL in the default browser
-				const claudeUrl = result.sandbox.claudeHost.startsWith("http")
-					? result.sandbox.claudeHost
-					: `https://${result.sandbox.claudeHost}`;
-				window.open(claudeUrl, "_blank");
-			} else {
-				console.error("Failed to create cloud sandbox:", result.error);
-				alert(
-					`Failed to create cloud terminal: ${result.error || "Unknown error"}`,
-				);
+			const sandbox = await createCloudSandbox();
+			if (sandbox?.websshHost) {
+				// Create WebView tab for WebSSH terminal (port 8888)
+				const websshUrl = sandbox.websshHost.startsWith("http")
+					? sandbox.websshHost
+					: `https://${sandbox.websshHost}`;
+				addTab(activeWorkspace.id, TabType.WebView, {
+					url: websshUrl,
+					title: `SSH: ${sandbox.name}`,
+				});
 			}
 		} catch (error) {
 			console.error("Error creating cloud terminal:", error);
@@ -139,15 +175,26 @@ export function TabsView() {
 							)}
 						</div>
 
-						{/* Cloud Terminals Section */}
-						<div className="pt-4 border-t border-sidebar-border mt-4">
+						{/* Cloud Section */}
+						<div className="pt-4 border-t border-sidebar-border mt-4 space-y-1">
+							<Button
+								variant="ghost"
+								onClick={handleAddCloudChat}
+								className="w-full text-start group px-3 py-2 rounded-md cursor-pointer flex items-center gap-2 text-blue-400 hover:text-blue-300"
+								disabled={!activeWorkspaceId || isCreatingCloud}
+							>
+								<HiMiniCloud className="size-4" />
+								<span className="truncate flex-1">
+									{isCreatingCloud ? "Creating..." : "New Cloud Agent"}
+								</span>
+							</Button>
 							<Button
 								variant="ghost"
 								onClick={handleAddCloudTerminal}
 								className="w-full text-start group px-3 py-2 rounded-md cursor-pointer flex items-center gap-2 text-blue-400 hover:text-blue-300"
 								disabled={!activeWorkspaceId || isCreatingCloud}
 							>
-								<HiMiniCloud className="size-4" />
+								<HiMiniCommandLine className="size-4" />
 								<span className="truncate flex-1">
 									{isCreatingCloud ? "Creating..." : "New Cloud Terminal"}
 								</span>
