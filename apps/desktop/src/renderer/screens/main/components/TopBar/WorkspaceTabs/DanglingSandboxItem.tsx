@@ -4,7 +4,7 @@ import { useState } from "react";
 import { HiMiniCloud, HiMiniXMark } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
 import { trpcClient } from "renderer/lib/trpc-client";
-import { TabType, useAddTab } from "renderer/stores";
+import { useAddCloudTab } from "renderer/stores";
 
 interface DanglingSandboxItemProps {
 	id: string;
@@ -24,7 +24,7 @@ export function DanglingSandboxItem({
 	const [isDeleting, setIsDeleting] = useState(false);
 	const [isCreating, setIsCreating] = useState(false);
 	const utils = trpc.useUtils();
-	const addTab = useAddTab();
+	const addCloudTab = useAddCloudTab();
 
 	// Get first project to create workspace in
 	const { data: recentProjects = [] } = trpc.projects.getRecents.useQuery();
@@ -72,15 +72,12 @@ export function DanglingSandboxItem({
 				},
 			});
 
-			// Add webview tabs
+			// Add cloud tabs
 			if (claudeHost) {
 				const claudeUrl = claudeHost.startsWith("http")
 					? claudeHost
 					: `https://${claudeHost}`;
-				addTab(workspaceId, TabType.WebView, {
-					url: claudeUrl,
-					title: "Cloud Agent",
-				});
+				addCloudTab(workspaceId, claudeUrl);
 			}
 
 			if (websshHost) {
@@ -88,10 +85,7 @@ export function DanglingSandboxItem({
 					? websshHost
 					: `https://${websshHost}`;
 				const websshUrl = `${baseUrl}/?hostname=localhost&username=user`;
-				addTab(workspaceId, TabType.WebView, {
-					url: websshUrl,
-					title: "Cloud Terminal",
-				});
+				addCloudTab(workspaceId, websshUrl);
 			}
 
 			// Invalidate dangling sandboxes query since this one is now linked

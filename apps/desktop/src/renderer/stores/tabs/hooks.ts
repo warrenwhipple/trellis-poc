@@ -5,6 +5,7 @@ export const useActiveTabIds = () =>
 	useTabsStore((state) => state.activeTabIds);
 
 export const useAddTab = () => useTabsStore((state) => state.addTab);
+export const useAddCloudTab = () => useTabsStore((state) => state.addCloudTab);
 export const useRemoveTab = () => useTabsStore((state) => state.removeTab);
 export const useRenameTab = () => useTabsStore((state) => state.renameTab);
 export const useSetActiveTab = () =>

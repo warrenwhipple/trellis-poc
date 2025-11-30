@@ -11,7 +11,7 @@ import { trpc } from "renderer/lib/trpc";
 import { trpcClient } from "renderer/lib/trpc-client";
 import { useOpenNew } from "renderer/react-query/projects";
 import { useCreateWorkspace } from "renderer/react-query/workspaces";
-import { TabType, useAddTab } from "renderer/stores";
+import { useAddCloudTab } from "renderer/stores";
 
 export interface CloudWorkspaceButtonProps {
 	className?: string;
@@ -24,7 +24,7 @@ export function CloudWorkspaceButton({ className }: CloudWorkspaceButtonProps) {
 	const { data: recentProjects = [] } = trpc.projects.getRecents.useQuery();
 	const createWorkspace = useCreateWorkspace();
 	const openNew = useOpenNew();
-	const addTab = useAddTab();
+	const addCloudTab = useAddCloudTab();
 
 	const generateSandboxName = () => {
 		const adjectives = [
@@ -91,15 +91,12 @@ export function CloudWorkspaceButton({ className }: CloudWorkspaceButtonProps) {
 				});
 			}
 
-			// 4. Add two webview tabs: Claude chat (7030) and WebSSH (8888)
+			// 4. Add two cloud tabs: Claude chat (7030) and WebSSH (8888)
 			if (sandbox?.claudeHost) {
 				const claudeUrl = sandbox.claudeHost.startsWith("http")
 					? sandbox.claudeHost
 					: `https://${sandbox.claudeHost}`;
-				addTab(workspaceId, TabType.WebView, {
-					url: claudeUrl,
-					title: "Cloud Agent",
-				});
+				addCloudTab(workspaceId, claudeUrl);
 			}
 
 			if (sandbox?.websshHost) {
@@ -108,10 +105,7 @@ export function CloudWorkspaceButton({ className }: CloudWorkspaceButtonProps) {
 					: `https://${sandbox.websshHost}`;
 				// Pre-fill webssh with localhost connection for user
 				const websshUrl = `${baseUrl}/?hostname=localhost&username=user`;
-				addTab(workspaceId, TabType.WebView, {
-					url: websshUrl,
-					title: "Cloud Terminal",
-				});
+				addCloudTab(workspaceId, websshUrl);
 			}
 
 			toast.success("Cloud workspace created", { id: toastId });

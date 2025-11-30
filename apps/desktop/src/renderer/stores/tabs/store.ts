@@ -20,6 +20,7 @@ import {
 	handleSplitTabVertical,
 } from "./helpers/split-operations";
 import {
+	handleAddCloudTab,
 	handleAddTab,
 	handleMarkTabAsUsed,
 	handleRemoveTab,
@@ -40,10 +41,20 @@ export const useTabsStore = create<TabsStore>()(
 				activeTabIds: {},
 				tabHistoryStacks: {},
 
-				addTab: (workspaceId, type = TabType.Single, options) => {
+				addTab: (workspaceId, type = TabType.Single) => {
 					let tabId = "";
 					set((state) => {
-						const result = handleAddTab(state, workspaceId, type, options);
+						const result = handleAddTab(state, workspaceId, type);
+						tabId = result.tabId;
+						return result.newState;
+					});
+					return tabId;
+				},
+
+				addCloudTab: (workspaceId, url) => {
+					let tabId = "";
+					set((state) => {
+						const result = handleAddCloudTab(state, workspaceId, url);
 						tabId = result.tabId;
 						return result.newState;
 					});

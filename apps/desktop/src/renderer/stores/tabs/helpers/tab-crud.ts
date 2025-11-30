@@ -1,15 +1,13 @@
-import type { TabsState } from "../types";
+import type { Tab, TabsState } from "../types";
 import { TabType } from "../types";
-import { type CreateTabOptions, createNewTab } from "../utils";
+import { createCloudTab, createNewTab } from "../utils";
 import { findNextTab } from "./next-tab-finder";
 
-export const handleAddTab = (
+const addTabToState = (
 	state: TabsState,
-	workspaceId: string,
-	type: TabType = TabType.Single,
-	options?: CreateTabOptions,
+	newTab: Tab,
 ): { newState: Partial<TabsState>; tabId: string } => {
-	const newTab = createNewTab(workspaceId, type, state.tabs, options);
+	const workspaceId = newTab.workspaceId;
 	const currentActiveId = state.activeTabIds[workspaceId];
 	const historyStack = state.tabHistoryStacks[workspaceId] || [];
 	const newHistoryStack = currentActiveId
@@ -30,6 +28,24 @@ export const handleAddTab = (
 		},
 		tabId: newTab.id,
 	};
+};
+
+export const handleAddTab = (
+	state: TabsState,
+	workspaceId: string,
+	type: TabType.Single | TabType.Group = TabType.Single,
+): { newState: Partial<TabsState>; tabId: string } => {
+	const newTab = createNewTab(workspaceId, type, state.tabs);
+	return addTabToState(state, newTab);
+};
+
+export const handleAddCloudTab = (
+	state: TabsState,
+	workspaceId: string,
+	url: string,
+): { newState: Partial<TabsState>; tabId: string } => {
+	const newTab = createCloudTab(workspaceId, url);
+	return addTabToState(state, newTab);
 };
 
 /**
