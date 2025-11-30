@@ -61,7 +61,7 @@ export interface CloudSandbox {
 	name: string; // Sandbox name
 	status: "creating" | "running" | "stopped" | "error";
 	websshHost?: string; // WebSSH terminal URL (port 8888)
-	claudeHost?: string; // Claude SSE server URL (port 9999)
+	claudeHost?: string; // Claude SSE server URL (web UI port 7030)
 	createdAt: string;
 	error?: string; // Error message if status is "error"
 }
