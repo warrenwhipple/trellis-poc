@@ -135,15 +135,9 @@ export const createWorkspacesRouter = () => {
 			return db.data.workspaces.slice().sort((a, b) => a.tabOrder - b.tabOrder);
 		}),
 
-		getAllGrouped: publicProcedure.query(async () => {
+		getAllGrouped: publicProcedure.query(() => {
 			const activeProjects = db.data.projects.filter(
 				(p) => p.tabOrder !== null,
-			);
-
-			// Fetch live sandbox statuses
-			const sandboxResult = await cloudApiClient.listSandboxes();
-			const liveSandboxes = new Map(
-				(sandboxResult.sandboxes ?? []).map((s) => [s.id, s.status]),
 			);
 
 			const groupsMap = new Map<
@@ -165,8 +159,6 @@ export const createWorkspacesRouter = () => {
 						createdAt: number;
 						updatedAt: number;
 						lastOpenedAt: number;
-						cloudSandboxId?: string;
-						cloudSandboxStatus?: string;
 					}>;
 				}
 			>();
@@ -190,24 +182,9 @@ export const createWorkspacesRouter = () => {
 
 			for (const workspace of workspaces) {
 				if (groupsMap.has(workspace.projectId)) {
-					const worktree = db.data.worktrees.find(
-						(wt) => wt.id === workspace.worktreeId,
-					);
-					const sandboxId = worktree?.cloudSandbox?.id;
-					// Use live status if available, fallback to stored status
-					const liveStatus = sandboxId
-						? liveSandboxes.get(sandboxId)
-						: undefined;
-					// If sandbox exists in db but not in live list, it's stopped/deleted
-					const status = sandboxId
-						? (liveStatus ?? "stopped")
-						: worktree?.cloudSandbox?.status;
-
 					groupsMap.get(workspace.projectId)?.workspaces.push({
 						...workspace,
 						worktreePath: getWorktreePath(workspace.worktreeId) ?? "",
-						cloudSandboxId: sandboxId,
-						cloudSandboxStatus: status,
 					});
 				}
 			}

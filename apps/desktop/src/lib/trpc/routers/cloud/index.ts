@@ -110,6 +110,30 @@ export const createCloudRouter = () => {
 				return cloudApiClient.getSandboxStatus(input.sandboxId);
 			}),
 
+		getWorktreeCloudStatus: publicProcedure
+			.input(
+				z.object({
+					worktreeId: z.string(),
+				}),
+			)
+			.query(async ({ input }) => {
+				const worktree = db.data.worktrees.find(
+					(wt) => wt.id === input.worktreeId,
+				);
+				if (!worktree?.cloudSandbox?.id) {
+					return { hasCloud: false as const };
+				}
+
+				const result = await cloudApiClient.getSandboxStatus(
+					worktree.cloudSandbox.id,
+				);
+				return {
+					hasCloud: true as const,
+					sandboxId: worktree.cloudSandbox.id,
+					status: result.success ? result.status : "stopped",
+				};
+			}),
+
 		setWorktreeSandbox: publicProcedure
 			.input(
 				z.object({

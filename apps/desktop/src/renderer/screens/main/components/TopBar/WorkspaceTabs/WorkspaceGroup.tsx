@@ -6,11 +6,10 @@ import { WorkspaceItem } from "./WorkspaceItem";
 interface Workspace {
 	id: string;
 	projectId: string;
+	worktreeId: string;
 	worktreePath: string;
 	name: string;
 	tabOrder: number;
-	cloudSandboxId?: string;
-	cloudSandboxStatus?: string;
 }
 
 interface WorkspaceGroupProps {
@@ -74,6 +73,7 @@ export function WorkspaceGroup({
 							<WorkspaceItem
 								id={workspace.id}
 								projectId={workspace.projectId}
+								worktreeId={workspace.worktreeId}
 								worktreePath={workspace.worktreePath}
 								title={workspace.name}
 								isActive={workspace.id === activeWorkspaceId}
@@ -81,8 +81,6 @@ export function WorkspaceGroup({
 								width={workspaceWidth}
 								onMouseEnter={() => onWorkspaceHover(workspace.id)}
 								onMouseLeave={() => onWorkspaceHover(null)}
-								cloudSandboxId={workspace.cloudSandboxId}
-								cloudSandboxStatus={workspace.cloudSandboxStatus}
 							/>
 						</motion.div>
 					))}

@@ -1,6 +1,6 @@
 import { Button } from "@superset/ui/button";
 import { cn } from "@superset/ui/utils";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import {
 	HiExclamationTriangle,
@@ -22,6 +22,7 @@ const WORKSPACE_TYPE = "WORKSPACE";
 interface WorkspaceItemProps {
 	id: string;
 	projectId: string;
+	worktreeId: string;
 	worktreePath: string;
 	title: string;
 	isActive: boolean;
@@ -29,13 +30,12 @@ interface WorkspaceItemProps {
 	width: number;
 	onMouseEnter?: () => void;
 	onMouseLeave?: () => void;
-	cloudSandboxId?: string;
-	cloudSandboxStatus?: string;
 }
 
 export function WorkspaceItem({
 	id,
 	projectId,
+	worktreeId,
 	worktreePath,
 	title,
 	isActive,
@@ -43,8 +43,6 @@ export function WorkspaceItem({
 	width,
 	onMouseEnter,
 	onMouseLeave,
-	cloudSandboxId,
-	cloudSandboxStatus: initialSandboxStatus,
 }: WorkspaceItemProps) {
 	const setActive = useSetActiveWorkspace();
 	const reorderWorkspaces = useReorderWorkspaces();
@@ -52,28 +50,14 @@ export function WorkspaceItem({
 	const tabs = useTabs();
 	const rename = useWorkspaceRename(id, title);
 
-	// Track sandbox status with polling
-	const [sandboxStatus, setSandboxStatus] = useState<string | undefined>(
-		initialSandboxStatus,
+	// Fetch cloud status for this worktree (polls every 30s if it has a sandbox)
+	const { data: cloudStatus } = trpc.cloud.getWorktreeCloudStatus.useQuery(
+		{ worktreeId },
+		{ refetchInterval: 30000 },
 	);
 
-	// Poll for sandbox status every 30 seconds if this is a cloud workspace
-	const { data: statusResult } = trpc.cloud.getSandboxStatus.useQuery(
-		{ sandboxId: cloudSandboxId ?? "" },
-		{
-			enabled: !!cloudSandboxId,
-			refetchInterval: 30000,
-		},
-	);
-
-	useEffect(() => {
-		if (statusResult?.success && statusResult.status) {
-			setSandboxStatus(statusResult.status);
-		}
-	}, [statusResult]);
-
-	const isCloudWorkspace = !!cloudSandboxId;
-	const isSandboxStopped = sandboxStatus === "stopped";
+	const isCloudWorkspace = cloudStatus?.hasCloud === true;
+	const isSandboxStopped = isCloudWorkspace && cloudStatus.status === "stopped";
 
 	const needsAttention = tabs
 		.filter((t) => t.workspaceId === id)
