@@ -3,6 +3,7 @@ import { toast } from "@superset/ui/sonner";
 import { useState } from "react";
 import { HiMiniCloud, HiMiniXMark } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
+import { trpcClient } from "renderer/lib/trpc-client";
 import { TabType, useAddTab } from "renderer/stores";
 
 interface DanglingSandboxItemProps {
@@ -112,7 +113,7 @@ export function DanglingSandboxItem({
 		e.stopPropagation();
 		setIsDeleting(true);
 		try {
-			const result = await window.ipcRenderer.invoke("cloud-sandbox-delete", {
+			const result = await trpcClient.cloud.deleteSandbox.mutate({
 				sandboxId: id,
 			});
 

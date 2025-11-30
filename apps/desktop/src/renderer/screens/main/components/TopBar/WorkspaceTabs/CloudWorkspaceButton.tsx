@@ -8,6 +8,7 @@ import { toast } from "@superset/ui/sonner";
 import { useState } from "react";
 import { HiMiniCloud, HiMiniFolderOpen } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
+import { trpcClient } from "renderer/lib/trpc-client";
 import { useOpenNew } from "renderer/react-query/projects";
 import { useCreateWorkspace } from "renderer/react-query/workspaces";
 import { TabType, useAddTab } from "renderer/stores";
@@ -70,7 +71,7 @@ export function CloudWorkspaceButton({ className }: CloudWorkspaceButtonProps) {
 
 			// 2. Create cloud sandbox
 			const sandboxName = generateSandboxName();
-			const result = await window.ipcRenderer.invoke("cloud-sandbox-create", {
+			const result = await trpcClient.cloud.createSandbox.mutate({
 				name: sandboxName,
 				projectId,
 				taskDescription: `Cloud development workspace`,
