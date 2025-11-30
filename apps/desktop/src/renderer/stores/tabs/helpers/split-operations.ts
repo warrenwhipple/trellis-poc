@@ -4,6 +4,10 @@ import type { Tab, TabsState } from "../types";
 import { TabType } from "../types";
 import { createNewTab } from "../utils";
 
+const canSplit = (tab: Tab | undefined): tab is Tab =>
+	tab !== undefined &&
+	(tab.type === TabType.Single || tab.type === TabType.Cloud);
+
 export const handleSplitTabVertical = (
 	state: TabsState,
 	workspaceId: string,
@@ -16,9 +20,9 @@ export const handleSplitTabVertical = (
 				(t) => t.id === state.activeTabIds[workspaceId] && !t.parentId,
 			);
 
-	if (!tabToSplit || tabToSplit.type === TabType.Group) return {};
+	if (!canSplit(tabToSplit)) return {};
 
-	// Groups can't be split - they already contain multiple panes
+	// If tab is in a group, split within the group
 	if (tabToSplit.parentId && path) {
 		return splitPaneInGroup(state, tabToSplit, workspaceId, path, "row");
 	}
@@ -38,9 +42,9 @@ export const handleSplitTabHorizontal = (
 				(t) => t.id === state.activeTabIds[workspaceId] && !t.parentId,
 			);
 
-	if (!tabToSplit || tabToSplit.type === TabType.Group) return {};
+	if (!canSplit(tabToSplit)) return {};
 
-	// Groups can't be split - they already contain multiple panes
+	// If tab is in a group, split within the group
 	if (tabToSplit.parentId && path) {
 		return splitPaneInGroup(state, tabToSplit, workspaceId, path, "column");
 	}

@@ -2,9 +2,10 @@ import { Button } from "@superset/ui/button";
 import { HiMiniXMark } from "react-icons/hi2";
 import type { MosaicBranch } from "react-mosaic-component";
 import { MosaicWindow } from "react-mosaic-component";
-import type { Tab } from "renderer/stores";
+import { type CloudTab, type Tab, TabType } from "renderer/stores";
 import { TabContentContextMenu } from "../TabContentContextMenu";
 import { Terminal } from "../Terminal";
+import { WebView } from "../WebView";
 
 interface GroupTabPaneProps {
 	tabId: string;
@@ -48,6 +49,13 @@ export function GroupTabPane({
 		removeChildTabFromGroup(groupId, tabId);
 	};
 
+	const renderContent = () => {
+		if (childTab.type === TabType.Cloud) {
+			return <WebView url={(childTab as CloudTab).url} />;
+		}
+		return <Terminal tabId={tabId} workspaceId={workspaceId} />;
+	};
+
 	return (
 		<MosaicWindow<string>
 			path={path}
@@ -70,9 +78,7 @@ export function GroupTabPane({
 				onSplitVertical={() => splitTabVertical(workspaceId, tabId, path)}
 				onClosePane={() => removeChildTabFromGroup(groupId, tabId)}
 			>
-				<div className="w-full h-full overflow-hidden">
-					<Terminal tabId={tabId} workspaceId={workspaceId} />
-				</div>
+				<div className="w-full h-full overflow-hidden">{renderContent()}</div>
 			</TabContentContextMenu>
 		</MosaicWindow>
 	);

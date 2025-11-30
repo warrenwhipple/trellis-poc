@@ -2,6 +2,10 @@ import type { MosaicNode } from "react-mosaic-component";
 import { type Tab, type TabGroup, TabType } from "./types";
 import { createNewTab } from "./utils";
 
+/** Check if a tab can be dragged into groups (Single or Cloud, not Group) */
+const canDragIntoGroup = (tab: Tab): boolean =>
+	tab.type === TabType.Single || tab.type === TabType.Cloud;
+
 export interface DragTabToTabResult {
 	tabs: Tab[];
 	activeTabIds: Record<string, string | null>;
@@ -255,7 +259,7 @@ export const handleDragTabToTab = (
 	}
 
 	// Rule 2: Dragging into a child tab - redirects to parent group since child tabs can't be drop targets
-	if (targetTab.parentId && draggedTab.type === TabType.Single) {
+	if (targetTab.parentId && canDragIntoGroup(draggedTab)) {
 		const parentGroup = state.tabs.find(
 			(tab) => tab.id === targetTab.parentId && tab.type === TabType.Group,
 		) as TabGroup | undefined;
@@ -324,7 +328,7 @@ export const handleDragTabToTab = (
 	}
 
 	// Rule 3: Dragging into a group tab - adds tab to existing split view group
-	if (targetTab.type === TabType.Group && draggedTab.type === TabType.Single) {
+	if (targetTab.type === TabType.Group && canDragIntoGroup(draggedTab)) {
 		// If dragging a tab from the same group, create a new tab and add to the group
 		if (draggedTab.parentId === targetTabId) {
 			const newTab = createNewTab(workspaceId, TabType.Single, state.tabs);
@@ -386,8 +390,8 @@ export const handleDragTabToTab = (
 		};
 	}
 
-	// Rule 4: Dragging single tab into another single tab - creates new group container for split view
-	if (targetTab.type === TabType.Single && draggedTab.type === TabType.Single) {
+	// Rule 4: Dragging splittable tab into another splittable tab - creates new group container for split view
+	if (canDragIntoGroup(targetTab) && canDragIntoGroup(draggedTab)) {
 		const groupId = `tab-${Date.now()}-group`;
 
 		// Keep original tab IDs stable - just update their parentId
