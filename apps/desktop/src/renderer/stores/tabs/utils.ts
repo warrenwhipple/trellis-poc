@@ -244,12 +244,12 @@ export const createCloudWindowWithPanes = (
 	const agentPane = createWebviewPane(windowId, agentUrl, "Cloud Agent");
 	const sshPane = createWebviewPane(windowId, sshUrl, "Cloud SSH");
 
-	// Split layout: agent on left (70%), ssh on right (30%)
+	// Split layout: agent on left (60%), ssh on right (40%)
 	const layout: MosaicNode<string> = {
 		direction: "row",
 		first: agentPane.id,
 		second: sshPane.id,
-		splitPercentage: 70,
+		splitPercentage: 60,
 	};
 
 	const window: Window = {
