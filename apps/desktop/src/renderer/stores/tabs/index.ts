@@ -4,10 +4,9 @@ export * from "./useAgentHookListener";
 export * from "./utils";
 
 // Convenience hooks for cloud/webview operations
-import { useWindowsStore } from "./store";
+import { useTabsStore } from "./store";
 
-export const useAddWebviewWindow = () =>
-	useWindowsStore((state) => state.addWebviewWindow);
+export const useAddWebviewTab = () =>
+	useTabsStore((state) => state.addWebviewTab);
 
-export const useAddCloudWindow = () =>
-	useWindowsStore((state) => state.addCloudWindow);
+export const useAddCloudTab = () => useTabsStore((state) => state.addCloudTab);

@@ -7,53 +7,59 @@ import {
 	registerPaneRef,
 	unregisterPaneRef,
 } from "renderer/stores/tabs/pane-refs";
-import type { Pane } from "renderer/stores/tabs/types";
+import type { Pane, Tab } from "renderer/stores/tabs/types";
 import { TabContentContextMenu } from "../TabContentContextMenu";
 import { Terminal } from "../Terminal";
 import { WebView } from "../WebView";
 
 type SplitOrientation = "vertical" | "horizontal";
 
-interface WindowPaneProps {
+interface TabPaneProps {
 	paneId: string;
 	path: MosaicBranch[];
 	pane: Pane;
 	isActive: boolean;
-	windowId: string;
+	tabId: string;
 	workspaceId: string;
 	splitPaneAuto: (
-		windowId: string,
+		tabId: string,
 		sourcePaneId: string,
 		dimensions: { width: number; height: number },
 		path?: MosaicBranch[],
 	) => void;
 	splitPaneHorizontal: (
-		windowId: string,
+		tabId: string,
 		sourcePaneId: string,
 		path?: MosaicBranch[],
 	) => void;
 	splitPaneVertical: (
-		windowId: string,
+		tabId: string,
 		sourcePaneId: string,
 		path?: MosaicBranch[],
 	) => void;
 	removePane: (paneId: string) => void;
-	setFocusedPane: (windowId: string, paneId: string) => void;
+	setFocusedPane: (tabId: string, paneId: string) => void;
+	availableTabs: Tab[];
+	onMoveToTab: (targetTabId: string) => void;
+	onMoveToNewTab: () => void;
 }
 
-export function WindowPane({
+export function TabPane({
 	paneId,
 	path,
 	pane,
 	isActive,
-	windowId,
+	tabId,
 	workspaceId,
 	splitPaneAuto,
 	splitPaneHorizontal,
 	splitPaneVertical,
 	removePane,
 	setFocusedPane,
-}: WindowPaneProps) {
+	availableTabs,
+	onMoveToTab,
+	onMoveToNewTab,
+}: TabPaneProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [splitOrientation, setSplitOrientation] =
 		useState<SplitOrientation>("vertical");
@@ -88,7 +94,7 @@ export function WindowPane({
 	}, []);
 
 	const handleFocus = () => {
-		setFocusedPane(windowId, paneId);
+		setFocusedPane(tabId, paneId);
 	};
 
 	const handleClosePane = (e: React.MouseEvent) => {
@@ -102,7 +108,7 @@ export function WindowPane({
 		if (!container) return;
 
 		const { width, height } = container.getBoundingClientRect();
-		splitPaneAuto(windowId, paneId, { width, height }, path);
+		splitPaneAuto(tabId, paneId, { width, height }, path);
 	};
 
 	const splitIcon =
@@ -117,12 +123,12 @@ export function WindowPane({
 			path={path}
 			title={pane.name}
 			toolbarControls={
-				<div className="flex items-center gap-1">
+				<div className="flex items-center gap-0.5">
 					<button
 						type="button"
 						onClick={handleSplitPane}
 						title="Split pane"
-						className="rounded-full p-0.5 hover:bg-white/10"
+						className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted-foreground/20 hover:text-foreground"
 					>
 						{splitIcon}
 					</button>
@@ -130,7 +136,7 @@ export function WindowPane({
 						type="button"
 						onClick={handleClosePane}
 						title="Close pane"
-						className="rounded-full p-0.5 hover:bg-white/10"
+						className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted-foreground/20 hover:text-foreground"
 					>
 						<HiMiniXMark className="size-4" />
 					</button>
@@ -139,9 +145,13 @@ export function WindowPane({
 			className={isActive ? "mosaic-window-focused" : ""}
 		>
 			<TabContentContextMenu
-				onSplitHorizontal={() => splitPaneHorizontal(windowId, paneId, path)}
-				onSplitVertical={() => splitPaneVertical(windowId, paneId, path)}
+				onSplitHorizontal={() => splitPaneHorizontal(tabId, paneId, path)}
+				onSplitVertical={() => splitPaneVertical(tabId, paneId, path)}
 				onClosePane={() => removePane(paneId)}
+				currentTabId={tabId}
+				availableTabs={availableTabs}
+				onMoveToTab={onMoveToTab}
+				onMoveToNewTab={onMoveToNewTab}
 			>
 				{/* biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: Terminal handles its own keyboard events and focus */}
 				<div

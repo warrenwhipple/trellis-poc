@@ -1,5 +1,5 @@
 import type { MosaicBranch, MosaicNode } from "react-mosaic-component";
-import type { Pane, TerminalPane, WebviewPane, Window } from "./types";
+import type { Pane, Tab, TerminalPane, WebviewPane } from "./types";
 
 /**
  * Generates a unique ID with the given prefix
@@ -8,12 +8,12 @@ export const generateId = (prefix: string): string => {
 	return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
 };
 
-/**
- * Gets the display name for a window
- * Now just returns the stored name since names are static at creation
- */
-export const getWindowDisplayName = (window: Window): string => {
-	return window.name || "Window";
+export const getTabDisplayName = (tab: Tab): string => {
+	const userTitle = tab.userTitle?.trim();
+	if (userTitle) {
+		return userTitle;
+	}
+	return tab.name || "Terminal";
 };
 
 /**
@@ -33,17 +33,30 @@ export const extractPaneIdsFromLayout = (
 };
 
 /**
+ * Options for creating a pane with preset configuration
+ */
+export interface CreatePaneOptions {
+	initialCommands?: string[];
+	initialCwd?: string;
+}
+
+/**
  * Creates a new terminal pane
  */
-export const createPane = (windowId: string): TerminalPane => {
+export const createPane = (
+	tabId: string,
+	options?: CreatePaneOptions,
+): TerminalPane => {
 	const id = generateId("pane");
 
 	return {
 		id,
-		windowId,
+		tabId,
 		type: "terminal",
 		name: "Terminal",
 		isNew: true,
+		initialCommands: options?.initialCommands,
+		initialCwd: options?.initialCwd,
 	};
 };
 
@@ -51,7 +64,7 @@ export const createPane = (windowId: string): TerminalPane => {
  * Creates a new webview pane for cloud workspaces
  */
 export const createWebviewPane = (
-	windowId: string,
+	tabId: string,
 	url: string,
 	name?: string,
 ): WebviewPane => {
@@ -62,7 +75,7 @@ export const createWebviewPane = (
 
 	return {
 		id,
-		windowId,
+		tabId,
 		type: "webview",
 		name: derivedName,
 		url,
@@ -87,13 +100,13 @@ const getWebviewNameFromUrl = (url: string): string => {
 };
 
 /**
- * Generates a static window name based on existing windows
- * (e.g., "Window 1", "Window 2", finding the next available number)
+ * Generates a static tab name based on existing tabs
+ * (e.g., "Terminal 1", "Terminal 2", finding the next available number)
  */
-export const generateWindowName = (existingWindows: Window[]): string => {
-	const existingNumbers = existingWindows
-		.map((w) => {
-			const match = w.name.match(/^Window (\d+)$/);
+export const generateTabName = (existingTabs: Tab[]): string => {
+	const existingNumbers = existingTabs
+		.map((t) => {
+			const match = t.name.match(/^Terminal (\d+)$/);
 			return match ? Number.parseInt(match[1], 10) : 0;
 		})
 		.filter((n) => n > 0);
@@ -104,56 +117,57 @@ export const generateWindowName = (existingWindows: Window[]): string => {
 		nextNumber++;
 	}
 
-	return `Window ${nextNumber}`;
+	return `Terminal ${nextNumber}`;
 };
 
 /**
- * Creates a new window with an initial pane atomically
- * This ensures the invariant that windows always have at least one pane
+ * Creates a new tab with an initial pane atomically
+ * This ensures the invariant that tabs always have at least one pane
  */
-export const createWindowWithPane = (
+export const createTabWithPane = (
 	workspaceId: string,
-	existingWindows: Window[] = [],
-): { window: Window; pane: Pane } => {
-	const windowId = generateId("win");
-	const pane = createPane(windowId);
+	existingTabs: Tab[] = [],
+	options?: CreatePaneOptions,
+): { tab: Tab; pane: Pane } => {
+	const tabId = generateId("tab");
+	const pane = createPane(tabId, options);
 
-	// Filter to same workspace for window naming
-	const workspaceWindows = existingWindows.filter(
-		(w) => w.workspaceId === workspaceId,
+	// Filter to same workspace for tab naming
+	const workspaceTabs = existingTabs.filter(
+		(t) => t.workspaceId === workspaceId,
 	);
 
-	const window: Window = {
-		id: windowId,
-		name: generateWindowName(workspaceWindows),
+	const tab: Tab = {
+		id: tabId,
+		name: generateTabName(workspaceTabs),
 		workspaceId,
 		layout: pane.id, // Single pane = leaf node
 		createdAt: Date.now(),
 	};
 
-	return { window, pane };
+	return { tab, pane };
 };
 
 /**
- * Gets all pane IDs that belong to a specific window
+ * Gets all pane IDs that belong to a specific tab
  */
-export const getPaneIdsForWindow = (
+export const getPaneIdsForTab = (
 	panes: Record<string, Pane>,
-	windowId: string,
+	tabId: string,
 ): string[] => {
 	return Object.values(panes)
-		.filter((pane) => pane.windowId === windowId)
+		.filter((pane) => pane.tabId === tabId)
 		.map((pane) => pane.id);
 };
 
 /**
- * Checks if a window has only one pane remaining
+ * Checks if a tab has only one pane remaining
  */
-export const isLastPaneInWindow = (
+export const isLastPaneInTab = (
 	panes: Record<string, Pane>,
-	windowId: string,
+	tabId: string,
 ): boolean => {
-	return getPaneIdsForWindow(panes, windowId).length === 1;
+	return getPaneIdsForTab(panes, tabId).length === 1;
 };
 
 /**
@@ -261,16 +275,55 @@ export const findPanePath = (
 };
 
 /**
- * Creates a cloud window with split view (Agent on left, SSH on right)
+ * Adds a pane to an existing layout by creating a split
  */
-export const createCloudWindowWithPanes = (
+export const addPaneToLayout = (
+	existingLayout: MosaicNode<string>,
+	newPaneId: string,
+): MosaicNode<string> => ({
+	direction: "row",
+	first: existingLayout,
+	second: newPaneId,
+	splitPercentage: 50,
+});
+
+/**
+ * Updates the history stack when switching to a new active tab
+ * Adds the current active to history and removes the new active from history
+ */
+export const updateHistoryStack = (
+	historyStack: string[],
+	currentActiveId: string | null,
+	newActiveId: string,
+	tabIdToRemove?: string,
+): string[] => {
+	let newStack = historyStack.filter((id) => id !== newActiveId);
+
+	if (currentActiveId && currentActiveId !== newActiveId) {
+		newStack = [
+			currentActiveId,
+			...newStack.filter((id) => id !== currentActiveId),
+		];
+	}
+
+	if (tabIdToRemove) {
+		newStack = newStack.filter((id) => id !== tabIdToRemove);
+	}
+
+	return newStack;
+};
+
+/**
+ * Creates a cloud tab with split view (Agent on left, SSH on right)
+ */
+export const createCloudTabWithPanes = (
 	workspaceId: string,
 	agentUrl: string,
 	sshUrl: string,
-): { window: Window; agentPane: WebviewPane; sshPane: WebviewPane } => {
-	const windowId = generateId("win");
-	const agentPane = createWebviewPane(windowId, agentUrl, "Cloud Agent");
-	const sshPane = createWebviewPane(windowId, sshUrl, "Cloud SSH");
+): { tab: Tab; agentPane: WebviewPane; sshPane: WebviewPane } => {
+	const tabId = generateId("tab");
+	const agentPane = createWebviewPane(tabId, agentUrl, "Cloud Agent");
+	const sshPane = createWebviewPane(tabId, sshUrl, "Cloud SSH");
 
 	// Split layout: agent on left (60%), ssh on right (40%)
 	const layout: MosaicNode<string> = {
@@ -280,13 +333,13 @@ export const createCloudWindowWithPanes = (
 		splitPercentage: 60,
 	};
 
-	const window: Window = {
-		id: windowId,
+	const tab: Tab = {
+		id: tabId,
 		name: "Cloud",
 		workspaceId,
 		layout,
 		createdAt: Date.now(),
 	};
 
-	return { window, agentPane, sshPane };
+	return { tab, agentPane, sshPane };
 };

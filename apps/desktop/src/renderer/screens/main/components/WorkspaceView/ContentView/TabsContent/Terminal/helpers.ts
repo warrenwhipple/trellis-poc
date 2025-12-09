@@ -134,6 +134,58 @@ export interface KeyboardHandlerOptions {
 	onClear?: () => void;
 }
 
+export interface PasteHandlerOptions {
+	/** Callback when text is pasted, receives the pasted text */
+	onPaste?: (text: string) => void;
+}
+
+/**
+ * Setup paste handler for xterm to ensure bracketed paste mode works correctly.
+ *
+ * xterm.js's built-in paste handling via the textarea should work, but in some
+ * Electron environments the clipboard events may not propagate correctly.
+ * This handler explicitly intercepts paste events and uses xterm's paste() method,
+ * which properly handles bracketed paste mode (wrapping pasted content with
+ * \x1b[200~ and \x1b[201~ escape sequences when the shell has enabled it).
+ *
+ * This is required for TUI applications like opencode, vim, etc. that expect
+ * bracketed paste mode to distinguish between typed and pasted content.
+ *
+ * Returns a cleanup function to remove the handler.
+ */
+export function setupPasteHandler(
+	xterm: XTerm,
+	options: PasteHandlerOptions = {},
+): () => void {
+	const textarea = xterm.textarea;
+	if (!textarea) return () => {};
+
+	const handlePaste = (event: ClipboardEvent) => {
+		// Get text from clipboard event data
+		const text = event.clipboardData?.getData("text/plain");
+		if (!text) return;
+
+		// Stop xterm's internal paste handler from also processing this
+		event.preventDefault();
+		event.stopImmediatePropagation();
+
+		// Notify caller of pasted text (for command buffer tracking)
+		options.onPaste?.(text);
+
+		// xterm.paste() handles:
+		// 1. Line ending normalization (CRLF/LF -> CR)
+		// 2. Bracketed paste mode wrapping (\x1b[200~ ... \x1b[201~)
+		xterm.paste(text);
+	};
+
+	// Use capture phase to intercept before xterm's handler
+	textarea.addEventListener("paste", handlePaste, { capture: true });
+
+	return () => {
+		textarea.removeEventListener("paste", handlePaste, { capture: true });
+	};
+}
+
 /**
  * Setup keyboard handling for xterm including:
  * - Shortcut forwarding: App hotkeys are re-dispatched to document for react-hotkeys-hook

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { HiMiniCloud, HiMiniXMark } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
 import { trpcClient } from "renderer/lib/trpc-client";
-import { useAddCloudWindow } from "renderer/stores/tabs";
+import { useAddCloudTab } from "renderer/stores/tabs";
 
 interface DanglingSandboxItemProps {
 	id: string;
@@ -24,7 +24,7 @@ export function DanglingSandboxItem({
 	const [isDeleting, setIsDeleting] = useState(false);
 	const [isCreating, setIsCreating] = useState(false);
 	const utils = trpc.useUtils();
-	const addCloudWindow = useAddCloudWindow();
+	const addCloudTab = useAddCloudTab();
 
 	// Get first project to create workspace in
 	const { data: recentProjects = [] } = trpc.projects.getRecents.useQuery();
@@ -71,7 +71,7 @@ export function DanglingSandboxItem({
 				},
 			});
 
-			// Open cloud split window with Agent + SSH
+			// Open cloud split tab with Agent + SSH
 			if (claudeHost && websshHost) {
 				const agentUrl = claudeHost.startsWith("http")
 					? claudeHost
@@ -79,7 +79,7 @@ export function DanglingSandboxItem({
 				const sshUrl = websshHost.startsWith("http")
 					? `${websshHost}/?hostname=localhost&username=user`
 					: `https://${websshHost}/?hostname=localhost&username=user`;
-				addCloudWindow(result.workspace.id, agentUrl, sshUrl);
+				addCloudTab(result.workspace.id, agentUrl, sshUrl);
 			}
 
 			// Invalidate dangling sandboxes query since this one is now linked

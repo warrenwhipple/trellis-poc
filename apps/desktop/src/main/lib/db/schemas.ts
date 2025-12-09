@@ -46,6 +46,7 @@ export interface GitHubStatus {
 		checks: CheckItem[];
 	} | null;
 	repoUrl: string;
+	branchExistsOnRemote: boolean;
 	lastRefreshed: number;
 }
 
@@ -89,13 +90,34 @@ export const EXTERNAL_APPS = [
 	"iterm",
 	"warp",
 	"terminal",
+	// JetBrains IDEs
+	"intellij",
+	"webstorm",
+	"pycharm",
+	"phpstorm",
+	"rubymine",
+	"goland",
+	"clion",
+	"rider",
+	"datagrip",
+	"appcode",
+	"fleet",
+	"rustrover",
 ] as const;
 
 export type ExternalApp = (typeof EXTERNAL_APPS)[number];
 
+export interface TerminalPreset {
+	id: string;
+	name: string;
+	cwd: string;
+	commands: string[];
+}
+
 export interface Settings {
 	lastActiveWorkspaceId?: string;
 	lastUsedApp?: ExternalApp;
+	terminalPresets?: TerminalPreset[];
 }
 
 export interface Database {

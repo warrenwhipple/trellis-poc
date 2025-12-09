@@ -11,7 +11,7 @@ import { trpc } from "renderer/lib/trpc";
 import { trpcClient } from "renderer/lib/trpc-client";
 import { useOpenNew } from "renderer/react-query/projects";
 import { useCreateWorkspace } from "renderer/react-query/workspaces";
-import { useAddCloudWindow } from "renderer/stores";
+import { useAddCloudTab } from "renderer/stores/tabs";
 
 export interface CloudWorkspaceButtonProps {
 	className?: string;
@@ -24,7 +24,7 @@ export function CloudWorkspaceButton({ className }: CloudWorkspaceButtonProps) {
 	const { data: recentProjects = [] } = trpc.projects.getRecents.useQuery();
 	const createWorkspace = useCreateWorkspace();
 	const openNew = useOpenNew();
-	const addCloudWindow = useAddCloudWindow();
+	const addCloudTab = useAddCloudTab();
 
 	const generateSandboxName = () => {
 		const adjectives = [
@@ -91,7 +91,7 @@ export function CloudWorkspaceButton({ className }: CloudWorkspaceButtonProps) {
 				});
 			}
 
-			// 4. Add cloud split window with Agent (left) + SSH (right)
+			// 4. Add cloud split tab with Agent (left) + SSH (right)
 			if (sandbox?.claudeHost && sandbox?.websshHost) {
 				const agentUrl = sandbox.claudeHost.startsWith("http")
 					? sandbox.claudeHost
@@ -102,7 +102,7 @@ export function CloudWorkspaceButton({ className }: CloudWorkspaceButtonProps) {
 					: `https://${sandbox.websshHost}`;
 				const sshUrl = `${sshBaseUrl}/?hostname=localhost&username=user`;
 
-				addCloudWindow(workspaceId, agentUrl, sshUrl);
+				addCloudTab(workspaceId, agentUrl, sshUrl);
 			}
 
 			toast.success("Cloud workspace created", { id: toastId });
@@ -121,7 +121,7 @@ export function CloudWorkspaceButton({ className }: CloudWorkspaceButtonProps) {
 	const handleOpenNewProject = async () => {
 		try {
 			const result = await openNew.mutateAsync(undefined);
-			if (!result.canceled && result.project) {
+			if (!result.canceled && "project" in result && result.project) {
 				handleCreateCloudWorkspace(result.project.id);
 			}
 		} catch (error) {
