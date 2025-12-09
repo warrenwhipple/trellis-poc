@@ -4,6 +4,7 @@ import type { CloudSandbox } from "shared/types";
 interface CreateSandboxParams {
 	name: string;
 	githubRepo?: string;
+	githubBranch?: string;
 	taskDescription?: string;
 	envVars?: Record<string, string>;
 }
@@ -83,6 +84,7 @@ class CloudApiClient {
 				name: params.name,
 				template: "yolocode",
 				githubRepo: params.githubRepo,
+				githubBranch: params.githubBranch,
 				githubToken: token, // Pass gh token for repo cloning
 				taskDescription: params.taskDescription,
 				envVars: {
@@ -98,6 +100,7 @@ class CloudApiClient {
 				name: requestBody.name,
 				template: requestBody.template,
 				githubRepo: requestBody.githubRepo,
+				githubBranch: requestBody.githubBranch,
 				taskDescription: requestBody.taskDescription,
 				envVars: claudeAuthToken
 					? { CLAUDE_CODE_OAUTH_TOKEN: "***" }

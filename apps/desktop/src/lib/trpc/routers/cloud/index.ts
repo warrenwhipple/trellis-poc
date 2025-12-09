@@ -56,6 +56,7 @@ export const createCloudRouter = () => {
 				z.object({
 					name: z.string(),
 					projectId: z.string(),
+					worktreeId: z.string().optional(),
 					taskDescription: z.string().optional(),
 				}),
 			)
@@ -79,9 +80,21 @@ export const createCloudRouter = () => {
 					};
 				}
 
+				// Get branch from worktree if provided
+				let githubBranch: string | undefined;
+				if (input.worktreeId) {
+					const worktree = db.data.worktrees.find(
+						(wt) => wt.id === input.worktreeId,
+					);
+					if (worktree?.branch) {
+						githubBranch = worktree.branch;
+					}
+				}
+
 				return cloudApiClient.createSandbox({
 					name: input.name,
 					githubRepo,
+					githubBranch,
 					taskDescription: input.taskDescription,
 				});
 			}),
