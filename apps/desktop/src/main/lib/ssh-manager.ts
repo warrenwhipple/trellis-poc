@@ -1,7 +1,105 @@
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { Client, type ClientChannel, type SFTPWrapper } from "ssh2";
+
+/**
+ * Parsed SSH config host entry
+ */
+export interface SSHConfigHost {
+	name: string; // The Host alias (e.g., "myserver")
+	hostName?: string; // The actual hostname/IP
+	user?: string;
+	port?: number;
+	identityFile?: string;
+}
+
+/**
+ * Parses ~/.ssh/config and returns a list of configured hosts
+ */
+export async function parseSSHConfig(): Promise<SSHConfigHost[]> {
+	const configPath = path.join(os.homedir(), ".ssh", "config");
+
+	if (!existsSync(configPath)) {
+		return [];
+	}
+
+	try {
+		const content = await readFile(configPath, "utf-8");
+		return parseSSHConfigContent(content);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Parses SSH config file content
+ */
+function parseSSHConfigContent(content: string): SSHConfigHost[] {
+	const hosts: SSHConfigHost[] = [];
+	let currentHost: SSHConfigHost | null = null;
+
+	const lines = content.split("\n");
+
+	for (const line of lines) {
+		const trimmed = line.trim();
+
+		// Skip empty lines and comments
+		if (!trimmed || trimmed.startsWith("#")) {
+			continue;
+		}
+
+		// Parse key-value pairs (handles both "Key Value" and "Key=Value")
+		const match = trimmed.match(/^(\S+)\s*[=\s]\s*(.+)$/);
+		if (!match) {
+			continue;
+		}
+
+		const [, key, value] = match;
+		const keyLower = key.toLowerCase();
+
+		if (keyLower === "host") {
+			// Save previous host if exists
+			if (currentHost && currentHost.name !== "*") {
+				hosts.push(currentHost);
+			}
+
+			// Start new host (skip wildcards)
+			const hostName = value.trim();
+			if (hostName.includes("*") || hostName.includes("?")) {
+				currentHost = null;
+			} else {
+				currentHost = { name: hostName };
+			}
+		} else if (currentHost) {
+			// Add properties to current host
+			switch (keyLower) {
+				case "hostname":
+					currentHost.hostName = value.trim();
+					break;
+				case "user":
+					currentHost.user = value.trim();
+					break;
+				case "port":
+					currentHost.port = Number.parseInt(value.trim(), 10) || 22;
+					break;
+				case "identityfile":
+					// Expand ~ in identity file path
+					currentHost.identityFile = value.trim().replace(/^~/, os.homedir());
+					break;
+			}
+		}
+	}
+
+	// Don't forget the last host
+	if (currentHost && currentHost.name !== "*") {
+		hosts.push(currentHost);
+	}
+
+	return hosts;
+}
 
 /**
  * Escapes a string for safe use in a single-quoted shell argument.
@@ -69,7 +167,7 @@ export interface SSHCredentials {
 interface SSHSession {
 	client: Client;
 	shell: ClientChannel | null;
-	tabId: string;
+	paneId: string;
 	connectionId: string;
 	cols: number;
 	rows: number;
@@ -283,7 +381,7 @@ export class SSHManager extends EventEmitter {
 	}
 
 	async createShell(params: {
-		tabId: string;
+		paneId: string;
 		connectionId: string;
 		cwd?: string;
 		cols?: number;
@@ -293,7 +391,7 @@ export class SSHManager extends EventEmitter {
 		error?: string;
 		scrollback?: string;
 	}> {
-		const { tabId, connectionId, cwd, cols, rows } = params;
+		const { paneId, connectionId, cwd, cols, rows } = params;
 
 		const client = this.connections.get(connectionId);
 		if (!client) {
@@ -301,7 +399,7 @@ export class SSHManager extends EventEmitter {
 		}
 
 		// Check for existing session
-		const existing = this.sessions.get(tabId);
+		const existing = this.sessions.get(paneId);
 		if (existing?.isConnected) {
 			return { success: true, scrollback: existing.scrollback };
 		}
@@ -325,7 +423,7 @@ export class SSHManager extends EventEmitter {
 					const session: SSHSession = {
 						client,
 						shell: stream,
-						tabId,
+						paneId,
 						connectionId,
 						cols: terminalCols,
 						rows: terminalRows,
@@ -339,26 +437,26 @@ export class SSHManager extends EventEmitter {
 						const str = data.toString("utf8");
 						session.scrollback += str;
 						session.lastActive = Date.now();
-						this.emit(`data:${tabId}`, str);
+						this.emit(`data:${paneId}`, str);
 					});
 
 					stream.stderr?.on("data", (data: Buffer) => {
 						const str = data.toString("utf8");
 						session.scrollback += str;
-						this.emit(`data:${tabId}`, str);
+						this.emit(`data:${paneId}`, str);
 					});
 
 					stream.on("close", () => {
 						session.isConnected = false;
-						this.emit(`exit:${tabId}`, 0);
-						this.sessions.delete(tabId);
+						this.emit(`exit:${paneId}`, 0);
+						this.sessions.delete(paneId);
 					});
 
 					stream.on("error", (err: Error) => {
-						this.emit(`error:${tabId}`, err.message);
+						this.emit(`error:${paneId}`, err.message);
 					});
 
-					this.sessions.set(tabId, session);
+					this.sessions.set(paneId, session);
 
 					// Change to the requested directory if specified
 					if (cwd && cwd !== "~") {
@@ -376,21 +474,23 @@ export class SSHManager extends EventEmitter {
 		});
 	}
 
-	write(params: { tabId: string; data: string }): void {
-		const session = this.sessions.get(params.tabId);
+	write(params: { paneId: string; data: string }): void {
+		const session = this.sessions.get(params.paneId);
 		if (!session?.shell || !session.isConnected) {
-			throw new Error(`SSH session ${params.tabId} not found or not connected`);
+			throw new Error(
+				`SSH session ${params.paneId} not found or not connected`,
+			);
 		}
 
 		session.shell.write(params.data);
 		session.lastActive = Date.now();
 	}
 
-	resize(params: { tabId: string; cols: number; rows: number }): void {
-		const session = this.sessions.get(params.tabId);
+	resize(params: { paneId: string; cols: number; rows: number }): void {
+		const session = this.sessions.get(params.paneId);
 		if (!session?.shell || !session.isConnected) {
 			console.warn(
-				`Cannot resize SSH session ${params.tabId}: not found or not connected`,
+				`Cannot resize SSH session ${params.paneId}: not found or not connected`,
 			);
 			return;
 		}
@@ -401,11 +501,11 @@ export class SSHManager extends EventEmitter {
 		session.lastActive = Date.now();
 	}
 
-	signal(params: { tabId: string; signal?: string }): void {
-		const session = this.sessions.get(params.tabId);
+	signal(params: { paneId: string; signal?: string }): void {
+		const session = this.sessions.get(params.paneId);
 		if (!session?.shell || !session.isConnected) {
 			console.warn(
-				`Cannot signal SSH session ${params.tabId}: not found or not connected`,
+				`Cannot signal SSH session ${params.paneId}: not found or not connected`,
 			);
 			return;
 		}
@@ -420,8 +520,8 @@ export class SSHManager extends EventEmitter {
 		}
 	}
 
-	async kill(params: { tabId: string }): Promise<void> {
-		const session = this.sessions.get(params.tabId);
+	async kill(params: { paneId: string }): Promise<void> {
+		const session = this.sessions.get(params.paneId);
 		if (!session) {
 			return;
 		}
@@ -431,16 +531,16 @@ export class SSHManager extends EventEmitter {
 			session.shell.close();
 		}
 		session.isConnected = false;
-		this.emit(`exit:${params.tabId}`, 0);
-		this.sessions.delete(params.tabId);
+		this.emit(`exit:${params.paneId}`, 0);
+		this.sessions.delete(params.paneId);
 	}
 
-	getSession(tabId: string): {
+	getSession(paneId: string): {
 		isConnected: boolean;
 		connectionId: string;
 		lastActive: number;
 	} | null {
-		const session = this.sessions.get(tabId);
+		const session = this.sessions.get(paneId);
 		if (!session) {
 			return null;
 		}

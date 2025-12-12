@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { devtools } from "zustand/middleware";
 
-export type AppView = "workspace" | "settings" | "ssh";
+export type AppView = "workspace" | "settings";
 export type SettingsSection =
 	| "project"
 	| "workspace"
@@ -14,14 +14,11 @@ interface AppState {
 	currentView: AppView;
 	isSettingsTabOpen: boolean;
 	settingsSection: SettingsSection;
-	activeSSHConnectionId: string | null;
 	setView: (view: AppView) => void;
 	openSettings: (section?: SettingsSection) => void;
 	closeSettings: () => void;
 	closeSettingsTab: () => void;
 	setSettingsSection: (section: SettingsSection) => void;
-	openSSH: (connectionId: string) => void;
-	closeSSH: () => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -30,7 +27,6 @@ export const useAppStore = create<AppState>()(
 			currentView: "workspace",
 			isSettingsTabOpen: false,
 			settingsSection: "project",
-			activeSSHConnectionId: null,
 
 			setView: (view) => {
 				set({ currentView: view });
@@ -55,20 +51,6 @@ export const useAppStore = create<AppState>()(
 			setSettingsSection: (section) => {
 				set({ settingsSection: section });
 			},
-
-			openSSH: (connectionId) => {
-				set({
-					currentView: "ssh",
-					activeSSHConnectionId: connectionId,
-				});
-			},
-
-			closeSSH: () => {
-				set({
-					currentView: "workspace",
-					activeSSHConnectionId: null,
-				});
-			},
 		}),
 		{ name: "AppStore" },
 	),
@@ -87,7 +69,3 @@ export const useCloseSettings = () =>
 	useAppStore((state) => state.closeSettings);
 export const useCloseSettingsTab = () =>
 	useAppStore((state) => state.closeSettingsTab);
-export const useActiveSSHConnectionId = () =>
-	useAppStore((state) => state.activeSSHConnectionId);
-export const useOpenSSH = () => useAppStore((state) => state.openSSH);
-export const useCloseSSH = () => useAppStore((state) => state.closeSSH);

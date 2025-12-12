@@ -1,15 +1,13 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@superset/ui/tooltip";
 import { useState } from "react";
 import { HiExclamationTriangle } from "react-icons/hi2";
-import { LuChevronUp, LuFolderGit, LuFolderOpen, LuServer, LuX } from "react-icons/lu";
+import { LuChevronUp, LuFolderGit, LuFolderOpen, LuX } from "react-icons/lu";
 import { trpc } from "renderer/lib/trpc";
 import { useOpenNew } from "renderer/react-query/projects";
 import { useCreateWorkspace } from "renderer/react-query/workspaces";
-import { useOpenSSH } from "renderer/stores/app-state";
 import { ActionCard } from "./ActionCard";
 import { CloneRepoDialog } from "./CloneRepoDialog";
 import { InitGitDialog } from "./InitGitDialog";
-import { SSHConnectDialog } from "./SSHConnectDialog";
 import { StartTopBar } from "./StartTopBar";
 
 /**
@@ -57,10 +55,8 @@ export function StartView() {
 	const { data: homeDir } = trpc.window.getHomeDir.useQuery();
 	const openNew = useOpenNew();
 	const createWorkspace = useCreateWorkspace();
-	const openSSH = useOpenSSH();
 	const [error, setError] = useState<string | null>(null);
 	const [isCloneDialogOpen, setIsCloneDialogOpen] = useState(false);
-	const [isSSHDialogOpen, setIsSSHDialogOpen] = useState(false);
 	const [initGitDialog, setInitGitDialog] = useState<{
 		isOpen: boolean;
 		selectedPath: string;
@@ -108,10 +104,6 @@ export function StartView() {
 				},
 			},
 		);
-	};
-
-	const handleSSHConnect = (connectionId: string) => {
-		openSSH(connectionId);
 	};
 
 	const hasMoreProjects = recentProjects.length > 5;
@@ -183,16 +175,6 @@ export function StartView() {
 								onClick={() => {
 									setError(null);
 									setIsCloneDialogOpen(true);
-								}}
-								isLoading={isLoading}
-							/>
-
-							<ActionCard
-								icon={LuServer}
-								label="SSH"
-								onClick={() => {
-									setError(null);
-									setIsSSHDialogOpen(true);
 								}}
 								isLoading={isLoading}
 							/>
@@ -292,12 +274,6 @@ export function StartView() {
 				selectedPath={initGitDialog.selectedPath}
 				onClose={() => setInitGitDialog({ isOpen: false, selectedPath: "" })}
 				onError={setError}
-			/>
-			<SSHConnectDialog
-				isOpen={isSSHDialogOpen}
-				onClose={() => setIsSSHDialogOpen(false)}
-				onError={setError}
-				onConnect={handleSSHConnect}
 			/>
 		</div>
 	);

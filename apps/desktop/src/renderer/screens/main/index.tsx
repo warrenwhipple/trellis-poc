@@ -5,12 +5,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { HiArrowPath } from "react-icons/hi2";
 import { SetupConfigModal } from "renderer/components/SetupConfigModal";
 import { trpc } from "renderer/lib/trpc";
-import {
-	useActiveSSHConnectionId,
-	useCloseSSH,
-	useCurrentView,
-	useOpenSettings,
-} from "renderer/stores/app-state";
+import { useCurrentView, useOpenSettings } from "renderer/stores/app-state";
 import { useSidebarStore } from "renderer/stores/sidebar-state";
 import { getPaneDimensions } from "renderer/stores/tabs/pane-refs";
 import { useTabsStore } from "renderer/stores/tabs/store";
@@ -22,7 +17,6 @@ import { dragDropManager } from "../../lib/dnd";
 import { AppFrame } from "./components/AppFrame";
 import { Background } from "./components/Background";
 import { SettingsView } from "./components/SettingsView";
-import { SSHView } from "./components/SSHView";
 import { StartView } from "./components/StartView";
 import { TopBar } from "./components/TopBar";
 import { WorkspaceView } from "./components/WorkspaceView";
@@ -36,8 +30,6 @@ function LoadingSpinner() {
 export function MainScreen() {
 	const currentView = useCurrentView();
 	const openSettings = useOpenSettings();
-	const activeSSHConnectionId = useActiveSSHConnectionId();
-	const closeSSH = useCloseSSH();
 	const { toggleSidebar } = useSidebarStore();
 	const {
 		data: activeWorkspace,
@@ -149,19 +141,11 @@ export function MainScreen() {
 	]);
 
 	const showStartView =
-		!isLoading &&
-		!activeWorkspace &&
-		currentView !== "settings" &&
-		currentView !== "ssh";
+		!isLoading && !activeWorkspace && currentView !== "settings";
 
 	const renderContent = () => {
 		if (currentView === "settings") {
 			return <SettingsView />;
-		}
-		if (currentView === "ssh" && activeSSHConnectionId) {
-			return (
-				<SSHView connectionId={activeSSHConnectionId} onDisconnect={closeSSH} />
-			);
 		}
 		return <WorkspaceView />;
 	};

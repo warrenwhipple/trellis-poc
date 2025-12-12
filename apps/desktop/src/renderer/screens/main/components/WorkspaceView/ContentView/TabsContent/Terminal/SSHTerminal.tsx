@@ -2,9 +2,11 @@ import "@xterm/xterm/css/xterm.css";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { SearchAddon } from "@xterm/addon-search";
 import type { Terminal as XTerm } from "@xterm/xterm";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { trpc } from "renderer/lib/trpc";
+import { useTabsStore } from "renderer/stores/tabs/store";
+import { useTerminalCallbacksStore } from "renderer/stores/tabs/terminal-callbacks";
 import { useTerminalTheme } from "renderer/stores/theme";
 import { HOTKEYS } from "shared/hotkeys";
 import {
@@ -13,8 +15,8 @@ import {
 	setupFocusListener,
 	setupKeyboardHandler,
 	setupResizeHandlers,
-} from "../WorkspaceView/ContentView/TabsContent/Terminal/helpers";
-import { TerminalSearch } from "../WorkspaceView/ContentView/TabsContent/Terminal/TerminalSearch";
+} from "./helpers";
+import { TerminalSearch } from "./TerminalSearch";
 
 interface SSHStreamEvent {
 	type: "data" | "exit" | "error";
@@ -24,21 +26,17 @@ interface SSHStreamEvent {
 }
 
 interface SSHTerminalProps {
-	tabId: string;
+	paneId: string;
 	connectionId: string;
 	connectionName: string;
 	remoteCwd?: string;
-	isFocused?: boolean;
-	onFocus?: () => void;
 }
 
 export function SSHTerminal({
-	tabId,
+	paneId,
 	connectionId,
 	connectionName,
 	remoteCwd,
-	isFocused = true,
-	onFocus,
 }: SSHTerminalProps) {
 	const terminalRef = useRef<HTMLDivElement>(null);
 	const xtermRef = useRef<XTerm | null>(null);
@@ -49,6 +47,15 @@ export function SSHTerminal({
 	const [subscriptionEnabled, setSubscriptionEnabled] = useState(false);
 	const [isSearchOpen, setIsSearchOpen] = useState(false);
 	const terminalTheme = useTerminalTheme();
+	const initialThemeRef = useRef(terminalTheme);
+
+	const panes = useTabsStore((s) => s.panes);
+	const pane = panes[paneId];
+	const setFocusedPane = useTabsStore((s) => s.setFocusedPane);
+	const focusedPaneIds = useTabsStore((s) => s.focusedPaneIds);
+	const isFocused = pane?.tabId ? focusedPaneIds[pane.tabId] === paneId : false;
+	const isFocusedRef = useRef(isFocused);
+	isFocusedRef.current = isFocused;
 
 	const createShellMutation = trpc.ssh.createShell.useMutation();
 	const writeMutation = trpc.ssh.write.useMutation();
@@ -64,6 +71,13 @@ export function SSHTerminal({
 	writeRef.current = writeMutation.mutate;
 	resizeRef.current = resizeMutation.mutate;
 	killRef.current = killMutation.mutate;
+
+	const registerClearCallbackRef = useRef(
+		useTerminalCallbacksStore.getState().registerClearCallback,
+	);
+	const unregisterClearCallbackRef = useRef(
+		useTerminalCallbacksStore.getState().unregisterClearCallback,
+	);
 
 	const handleStreamData = (event: SSHStreamEvent) => {
 		if (!xtermRef.current) {
@@ -91,19 +105,29 @@ export function SSHTerminal({
 	};
 
 	// Subscribe to SSH stream
-	trpc.ssh.stream.useSubscription(tabId, {
+	trpc.ssh.stream.useSubscription(paneId, {
 		onData: handleStreamData,
 		enabled: true,
 	});
 
-	const handleTerminalFocus = useCallback(() => {
-		onFocus?.();
-	}, [onFocus]);
+	// Use ref to avoid triggering full terminal recreation when focus handler changes
+	const handleTerminalFocusRef = useRef(() => {});
+	handleTerminalFocusRef.current = () => {
+		if (pane?.tabId) {
+			setFocusedPane(pane.tabId, paneId);
+		}
+	};
 
 	// Auto-close search when terminal loses focus
 	useEffect(() => {
 		if (!isFocused) {
 			setIsSearchOpen(false);
+		}
+	}, [isFocused]);
+
+	useEffect(() => {
+		if (isFocused && xtermRef.current) {
+			xtermRef.current.focus();
 		}
 	}, [isFocused]);
 
@@ -127,10 +151,14 @@ export function SSHTerminal({
 			xterm,
 			fitAddon,
 			cleanup: cleanupQuerySuppression,
-		} = createTerminalInstance(container, remoteCwd, terminalTheme);
+		} = createTerminalInstance(container, remoteCwd, initialThemeRef.current);
 		xtermRef.current = xterm;
 		fitAddonRef.current = fitAddon;
 		isExitedRef.current = false;
+
+		if (isFocusedRef.current) {
+			xterm.focus();
+		}
 
 		// Load search addon
 		import("@xterm/addon-search").then(({ SearchAddon }) => {
@@ -176,7 +204,7 @@ export function SSHTerminal({
 			xterm.clear();
 			createShellRef.current(
 				{
-					tabId,
+					paneId,
 					connectionId,
 					cwd: remoteCwd,
 					cols: xterm.cols,
@@ -194,16 +222,12 @@ export function SSHTerminal({
 							);
 							xterm.writeln("[Press any key to retry]");
 							isExitedRef.current = true;
-							// Keep subscription disabled on failure - no events to process
-							// Next startShell() call will clear pending events and try again
 						}
 					},
 					onError: (err) => {
 						xterm.writeln(`\r\n\x1b[31mError: ${err.message}\x1b[0m`);
 						xterm.writeln("[Press any key to retry]");
 						isExitedRef.current = true;
-						// Keep subscription disabled on failure - no events to process
-						// Next startShell() call will clear pending events and try again
 					},
 				},
 			);
@@ -213,7 +237,7 @@ export function SSHTerminal({
 			if (isExitedRef.current) {
 				startShell();
 			} else {
-				writeRef.current({ tabId, data });
+				writeRef.current({ paneId, data });
 			}
 		};
 
@@ -223,7 +247,7 @@ export function SSHTerminal({
 		// Create SSH shell
 		createShellRef.current(
 			{
-				tabId,
+				paneId,
 				connectionId,
 				cwd: remoteCwd,
 				cols: xterm.cols,
@@ -241,61 +265,61 @@ export function SSHTerminal({
 						);
 						xterm.writeln("[Press any key to retry]");
 						isExitedRef.current = true;
-						// Keep subscription disabled on failure - no events to process
 					}
 				},
 				onError: (err) => {
 					xterm.writeln(`\r\n\x1b[31mError: ${err.message}\x1b[0m`);
 					xterm.writeln("[Press any key to retry]");
 					isExitedRef.current = true;
-					// Keep subscription disabled on failure - no events to process
 				},
 			},
 		);
 
 		const inputDisposable = xterm.onData(handleTerminalInput);
 
-		setupKeyboardHandler(xterm, {
+		const handleClear = () => {
+			xterm.clear();
+		};
+
+		const cleanupKeyboard = setupKeyboardHandler(xterm, {
 			onShiftEnter: () => {
 				if (!isExitedRef.current) {
-					writeRef.current({ tabId, data: "\\\n" });
+					writeRef.current({ paneId, data: "\\\n" });
 				}
 			},
-			onClear: () => {
-				xterm.clear();
-			},
+			onClear: handleClear,
 		});
 
-		const cleanupFocus = setupFocusListener(xterm, handleTerminalFocus);
+		// Register clear callback for context menu access
+		registerClearCallbackRef.current(paneId, handleClear);
+
+		const cleanupFocus = setupFocusListener(xterm, () =>
+			handleTerminalFocusRef.current(),
+		);
 		const cleanupResize = setupResizeHandlers(
 			container,
 			xterm,
 			fitAddon,
 			(cols, rows) => {
-				resizeRef.current({ tabId, cols, rows });
+				resizeRef.current({ paneId, cols, rows });
 			},
 		);
 
 		return () => {
 			isUnmounted = true;
 			inputDisposable.dispose();
+			cleanupKeyboard();
 			cleanupFocus?.();
 			cleanupResize();
 			cleanupQuerySuppression();
-			killRef.current({ tabId });
+			unregisterClearCallbackRef.current(paneId);
+			killRef.current({ paneId });
 			setSubscriptionEnabled(false);
 			xterm.dispose();
 			xtermRef.current = null;
 			searchAddonRef.current = null;
 		};
-	}, [
-		tabId,
-		connectionId,
-		connectionName,
-		remoteCwd,
-		terminalTheme,
-		handleTerminalFocus,
-	]);
+	}, [paneId, connectionId, connectionName, remoteCwd]);
 
 	// Sync theme changes
 	useEffect(() => {

@@ -2,7 +2,11 @@ import { observable } from "@trpc/server/observable";
 import { dialog } from "electron";
 import { db } from "main/lib/db";
 import type { SSHConnection } from "main/lib/db/schemas";
-import { sshManager } from "main/lib/ssh-manager";
+import {
+	parseSSHConfig,
+	type SSHConfigHost,
+	sshManager,
+} from "main/lib/ssh-manager";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
@@ -44,6 +48,13 @@ const sshCredentialsSchema = z
 
 export const createSSHRouter = () => {
 	return router({
+		// Get hosts from ~/.ssh/config
+		getConfigHosts: publicProcedure.query(
+			async (): Promise<SSHConfigHost[]> => {
+				return parseSSHConfig();
+			},
+		),
+
 		getConnections: publicProcedure.query((): SSHConnection[] => {
 			return db.data.sshConnections
 				.slice()
@@ -162,6 +173,90 @@ export const createSSHRouter = () => {
 				},
 			),
 
+		// Connect using a host from ~/.ssh/config
+		connectFromConfig: publicProcedure
+			.input(
+				z.object({
+					hostName: z.string().min(1), // The Host alias from SSH config
+					passphrase: z.string().optional(), // Optional passphrase for encrypted keys
+				}),
+			)
+			.mutation(
+				async ({
+					input,
+				}): Promise<{
+					success: boolean;
+					error?: string;
+					connectionId?: string;
+				}> => {
+					// Find the host in SSH config
+					const configHosts = await parseSSHConfig();
+					const configHost = configHosts.find((h) => h.name === input.hostName);
+
+					if (!configHost) {
+						return {
+							success: false,
+							error: `Host "${input.hostName}" not found in SSH config`,
+						};
+					}
+
+					// Build credentials from config
+					const host = configHost.hostName || configHost.name;
+					const port = configHost.port || 22;
+					const username = configHost.user || process.env.USER || "root";
+					const privateKeyPath =
+						configHost.identityFile || `${process.env.HOME}/.ssh/id_rsa`;
+
+					// Generate a connection ID based on the config
+					const connectionId = `config-${input.hostName}`;
+
+					// Save/update the connection in the database
+					const now = Date.now();
+					const existingIndex = db.data.sshConnections.findIndex(
+						(c) => c.id === connectionId,
+					);
+
+					if (existingIndex === -1) {
+						await db.update((data) => {
+							data.sshConnections.push({
+								id: connectionId,
+								name: input.hostName,
+								host,
+								port,
+								username,
+								authMethod: "key",
+								privateKeyPath,
+								lastUsedAt: now,
+								createdAt: now,
+							});
+						});
+					} else {
+						await db.update((data) => {
+							data.sshConnections[existingIndex].lastUsedAt = now;
+						});
+					}
+
+					// Connect
+					const result = await sshManager.connect({
+						connectionId,
+						credentials: {
+							host,
+							port,
+							username,
+							authMethod: "key",
+							privateKeyPath,
+							passphrase: input.passphrase,
+						},
+					});
+
+					if (result.success) {
+						return { success: true, connectionId };
+					}
+
+					return { success: false, error: result.error };
+				},
+			),
+
 		disconnect: publicProcedure
 			.input(z.object({ connectionId: z.string() }))
 			.mutation(({ input }): { success: boolean } => {
@@ -178,7 +273,7 @@ export const createSSHRouter = () => {
 		createShell: publicProcedure
 			.input(
 				z.object({
-					tabId: z.string(),
+					paneId: z.string(),
 					connectionId: z.string(),
 					cwd: z.string().optional(),
 					cols: z.number().optional(),
@@ -190,7 +285,7 @@ export const createSSHRouter = () => {
 			}),
 
 		write: publicProcedure
-			.input(z.object({ tabId: z.string(), data: z.string() }))
+			.input(z.object({ paneId: z.string(), data: z.string() }))
 			.mutation(({ input }) => {
 				sshManager.write(input);
 			}),
@@ -198,7 +293,7 @@ export const createSSHRouter = () => {
 		resize: publicProcedure
 			.input(
 				z.object({
-					tabId: z.string(),
+					paneId: z.string(),
 					cols: z.number(),
 					rows: z.number(),
 				}),
@@ -210,7 +305,7 @@ export const createSSHRouter = () => {
 		signal: publicProcedure
 			.input(
 				z.object({
-					tabId: z.string(),
+					paneId: z.string(),
 					signal: z.string().optional(),
 				}),
 			)
@@ -219,13 +314,13 @@ export const createSSHRouter = () => {
 			}),
 
 		kill: publicProcedure
-			.input(z.object({ tabId: z.string() }))
+			.input(z.object({ paneId: z.string() }))
 			.mutation(async ({ input }) => {
 				await sshManager.kill(input);
 			}),
 
-		getSession: publicProcedure.input(z.string()).query(({ input: tabId }) => {
-			return sshManager.getSession(tabId);
+		getSession: publicProcedure.input(z.string()).query(({ input: paneId }) => {
+			return sshManager.getSession(paneId);
 		}),
 
 		executeCommand: publicProcedure
@@ -276,7 +371,7 @@ export const createSSHRouter = () => {
 
 		stream: publicProcedure
 			.input(z.string())
-			.subscription(({ input: tabId }) => {
+			.subscription(({ input: paneId }) => {
 				return observable<
 					| { type: "data"; data: string }
 					| { type: "exit"; exitCode: number }
@@ -295,14 +390,14 @@ export const createSSHRouter = () => {
 						emit.next({ type: "error", message });
 					};
 
-					sshManager.on(`data:${tabId}`, onData);
-					sshManager.on(`exit:${tabId}`, onExit);
-					sshManager.on(`error:${tabId}`, onError);
+					sshManager.on(`data:${paneId}`, onData);
+					sshManager.on(`exit:${paneId}`, onExit);
+					sshManager.on(`error:${paneId}`, onError);
 
 					return () => {
-						sshManager.off(`data:${tabId}`, onData);
-						sshManager.off(`exit:${tabId}`, onExit);
-						sshManager.off(`error:${tabId}`, onError);
+						sshManager.off(`data:${paneId}`, onData);
+						sshManager.off(`exit:${paneId}`, onExit);
+						sshManager.off(`error:${paneId}`, onError);
 					};
 				});
 			}),
