@@ -1,12 +1,11 @@
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { getGitBinaryPath } from "main/lib/git-binary";
+import { createBundledGit } from "main/lib/git-binary";
 import type {
 	ChangedFile,
 	FileContents,
 	GitChangesStatus,
 } from "shared/changes-types";
-import simpleGit from "simple-git";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
 import {
@@ -16,13 +15,6 @@ import {
 	parseGitStatus,
 	parseNameStatus,
 } from "./utils/parse-status";
-
-/**
- * Creates a simpleGit instance configured to use the bundled git binary.
- */
-function createGit(baseDir: string) {
-	return simpleGit({ baseDir, binary: getGitBinaryPath() });
-}
 
 export const createChangesRouter = () => {
 	return router({
@@ -36,7 +28,7 @@ export const createChangesRouter = () => {
 					remote: string[];
 					defaultBranch: string;
 				}> => {
-					const git = createGit(input.worktreePath);
+					const git = createBundledGit(input.worktreePath);
 
 					const branchSummary = await git.branch(["-a"]);
 
@@ -85,7 +77,7 @@ export const createChangesRouter = () => {
 				}),
 			)
 			.query(async ({ input }): Promise<GitChangesStatus> => {
-				const git = createGit(input.worktreePath);
+				const git = createBundledGit(input.worktreePath);
 				const defaultBranch = input.defaultBranch || "main";
 
 				const status = await git.status();
@@ -201,7 +193,7 @@ export const createChangesRouter = () => {
 				}),
 			)
 			.query(async ({ input }): Promise<ChangedFile[]> => {
-				const git = createGit(input.worktreePath);
+				const git = createBundledGit(input.worktreePath);
 
 				const nameStatus = await git.raw([
 					"diff-tree",
@@ -243,7 +235,7 @@ export const createChangesRouter = () => {
 				}),
 			)
 			.query(async ({ input }): Promise<FileContents> => {
-				const git = createGit(input.worktreePath);
+				const git = createBundledGit(input.worktreePath);
 				const defaultBranch = input.defaultBranch || "main";
 				const originalPath = input.oldPath || input.filePath;
 				let original = "";
@@ -338,7 +330,7 @@ export const createChangesRouter = () => {
 				}),
 			)
 			.mutation(async ({ input }): Promise<{ success: boolean }> => {
-				const git = createGit(input.worktreePath);
+				const git = createBundledGit(input.worktreePath);
 				await git.add(input.filePath);
 				return { success: true };
 			}),
@@ -351,7 +343,7 @@ export const createChangesRouter = () => {
 				}),
 			)
 			.mutation(async ({ input }): Promise<{ success: boolean }> => {
-				const git = createGit(input.worktreePath);
+				const git = createBundledGit(input.worktreePath);
 				await git.reset(["HEAD", "--", input.filePath]);
 				return { success: true };
 			}),
@@ -364,7 +356,7 @@ export const createChangesRouter = () => {
 				}),
 			)
 			.mutation(async ({ input }): Promise<{ success: boolean }> => {
-				const git = createGit(input.worktreePath);
+				const git = createBundledGit(input.worktreePath);
 				try {
 					await git.checkout(["--", input.filePath]);
 					return { success: true };
@@ -378,7 +370,7 @@ export const createChangesRouter = () => {
 		stageAll: publicProcedure
 			.input(z.object({ worktreePath: z.string() }))
 			.mutation(async ({ input }): Promise<{ success: boolean }> => {
-				const git = createGit(input.worktreePath);
+				const git = createBundledGit(input.worktreePath);
 				await git.add("-A");
 				return { success: true };
 			}),
@@ -386,7 +378,7 @@ export const createChangesRouter = () => {
 		unstageAll: publicProcedure
 			.input(z.object({ worktreePath: z.string() }))
 			.mutation(async ({ input }): Promise<{ success: boolean }> => {
-				const git = createGit(input.worktreePath);
+				const git = createBundledGit(input.worktreePath);
 				await git.reset(["HEAD"]);
 				return { success: true };
 			}),

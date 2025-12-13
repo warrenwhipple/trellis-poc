@@ -3,8 +3,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { getGitBinaryPath } from "main/lib/git-binary";
-import simpleGit from "simple-git";
+import { createBundledGit, getGitBinaryPath } from "main/lib/git-binary";
 import {
 	adjectives,
 	animals,
@@ -12,14 +11,6 @@ import {
 } from "unique-names-generator";
 
 const execFileAsync = promisify(execFile);
-
-/**
- * Creates a simpleGit instance configured to use the bundled git binary.
- * This avoids dependency on system git (no Xcode license issues on macOS, etc.)
- */
-function createGit(baseDir: string) {
-	return simpleGit({ baseDir, binary: getGitBinaryPath() });
-}
 
 /**
  * Checks if a repository uses Git LFS.
@@ -61,7 +52,7 @@ async function repoUsesLfs(repoPath: string): Promise<boolean> {
 
 	// Final fallback: sample a few tracked files with git check-attr
 	try {
-		const git = createGit(repoPath);
+		const git = createBundledGit(repoPath);
 		const lsFiles = await git.raw(["ls-files"]);
 		const sampleFiles = lsFiles.split("\n").filter(Boolean).slice(0, 20);
 
@@ -118,7 +109,16 @@ export async function createWorktree(
 
 		await execFileAsync(
 			getGitBinaryPath(),
-			["-C", mainRepoPath, "worktree", "add", worktreePath, "-b", branch, startPoint],
+			[
+				"-C",
+				mainRepoPath,
+				"worktree",
+				"add",
+				worktreePath,
+				"-b",
+				branch,
+				startPoint,
+			],
 			{ timeout: 120_000 },
 		);
 
@@ -180,7 +180,7 @@ export async function removeWorktree(
 
 export async function getGitRoot(path: string): Promise<string> {
 	try {
-		const git = createGit(path);
+		const git = createBundledGit(path);
 		const root = await git.revparse(["--show-toplevel"]);
 		return root.trim();
 	} catch (_error) {
@@ -193,7 +193,7 @@ export async function worktreeExists(
 	worktreePath: string,
 ): Promise<boolean> {
 	try {
-		const git = createGit(mainRepoPath);
+		const git = createBundledGit(mainRepoPath);
 		const worktrees = await git.raw(["worktree", "list", "--porcelain"]);
 		const lines = worktrees.split("\n");
 		const worktreePrefix = `worktree ${worktreePath}`;
@@ -206,7 +206,7 @@ export async function worktreeExists(
 
 export async function hasOriginRemote(mainRepoPath: string): Promise<boolean> {
 	try {
-		const git = createGit(mainRepoPath);
+		const git = createBundledGit(mainRepoPath);
 		const remotes = await git.getRemotes();
 		return remotes.some((r) => r.name === "origin");
 	} catch {
@@ -215,7 +215,7 @@ export async function hasOriginRemote(mainRepoPath: string): Promise<boolean> {
 }
 
 export async function getDefaultBranch(mainRepoPath: string): Promise<string> {
-	const git = createGit(mainRepoPath);
+	const git = createBundledGit(mainRepoPath);
 
 	// Method 1: Check origin/HEAD symbolic ref
 	try {
@@ -247,7 +247,7 @@ export async function fetchDefaultBranch(
 	mainRepoPath: string,
 	defaultBranch: string,
 ): Promise<string> {
-	const git = createGit(mainRepoPath);
+	const git = createBundledGit(mainRepoPath);
 	await git.fetch("origin", defaultBranch);
 	const commit = await git.revparse(`origin/${defaultBranch}`);
 	return commit.trim();
@@ -257,7 +257,7 @@ export async function checkNeedsRebase(
 	worktreePath: string,
 	defaultBranch: string,
 ): Promise<boolean> {
-	const git = createGit(worktreePath);
+	const git = createBundledGit(worktreePath);
 	const behindCount = await git.raw([
 		"rev-list",
 		"--count",
@@ -269,7 +269,7 @@ export async function checkNeedsRebase(
 export async function hasUncommittedChanges(
 	worktreePath: string,
 ): Promise<boolean> {
-	const git = createGit(worktreePath);
+	const git = createBundledGit(worktreePath);
 	const status = await git.status();
 	return !status.isClean();
 }
@@ -277,7 +277,7 @@ export async function hasUncommittedChanges(
 export async function hasUnpushedCommits(
 	worktreePath: string,
 ): Promise<boolean> {
-	const git = createGit(worktreePath);
+	const git = createBundledGit(worktreePath);
 	try {
 		const aheadCount = await git.raw([
 			"rev-list",
@@ -305,7 +305,7 @@ export async function branchExistsOnRemote(
 	worktreePath: string,
 	branchName: string,
 ): Promise<boolean> {
-	const git = createGit(worktreePath);
+	const git = createBundledGit(worktreePath);
 	try {
 		const result = await git.raw([
 			"ls-remote",
