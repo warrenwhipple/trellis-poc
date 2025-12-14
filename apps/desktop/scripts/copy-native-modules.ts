@@ -16,7 +16,7 @@
 import { cpSync, existsSync, lstatSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const NATIVE_MODULES = ["node-pty"] as const;
+const NATIVE_MODULES = ["node-pty", "dugite"] as const;
 
 function prepareNativeModules() {
 	console.log("Preparing native modules for electron-builder...");

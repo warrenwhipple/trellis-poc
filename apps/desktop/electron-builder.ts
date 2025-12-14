@@ -35,7 +35,7 @@ const config: Configuration = {
 	asarUnpack: [
 		"**/node_modules/node-pty/**/*",
 		// Dugite's bundled git binaries must be unpacked to be executable
-		"**/node_modules/dugite/git/**/*",
+		"**/node_modules/dugite/**/*",
 		// Sound files must be unpacked so external audio players (afplay, paplay, etc.) can access them
 		"**/resources/sounds/**/*",
 	],
