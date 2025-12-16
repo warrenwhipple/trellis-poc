@@ -9,8 +9,35 @@ import {
 	animals,
 	uniqueNamesGenerator,
 } from "unique-names-generator";
+import { checkGitLfsAvailable, getShellEnvironment } from "./shell-env";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Builds the merged environment for git operations.
+ * Takes process.env as base, then overrides only PATH from shell environment.
+ * This preserves runtime vars (git credentials, proxy, ELECTRON_*, etc.)
+ * while picking up PATH modifications from shell profiles (e.g., homebrew git-lfs).
+ */
+async function getGitEnv(): Promise<Record<string, string>> {
+	const shellEnv = await getShellEnvironment();
+	const result: Record<string, string> = {};
+
+	// Start with process.env as base
+	for (const [key, value] of Object.entries(process.env)) {
+		if (typeof value === "string") {
+			result[key] = value;
+		}
+	}
+
+	// Only override PATH from shell env (use platform-appropriate key)
+	const pathKey = process.platform === "win32" ? "Path" : "PATH";
+	if (shellEnv[pathKey]) {
+		result[pathKey] = shellEnv[pathKey];
+	}
+
+	return result;
+}
 
 /**
  * Checks if a repository uses Git LFS.
@@ -100,12 +127,26 @@ export async function createWorktree(
 	worktreePath: string,
 	startPoint = "origin/main",
 ): Promise<void> {
-	// Check LFS usage for better error messaging
+	// Check LFS usage before try block so it's available in catch for error messaging
 	const usesLfs = await repoUsesLfs(mainRepoPath);
 
 	try {
 		const parentDir = join(worktreePath, "..");
 		await mkdir(parentDir, { recursive: true });
+
+		// Get merged environment (process.env + shell env for PATH)
+		const env = await getGitEnv();
+
+		// Proactive LFS check: detect early if repo uses LFS but git-lfs is missing
+		if (usesLfs) {
+			const lfsAvailable = await checkGitLfsAvailable(env);
+			if (!lfsAvailable) {
+				throw new Error(
+					`This repository uses Git LFS, but git-lfs was not found. ` +
+						`Please install git-lfs (e.g., 'brew install git-lfs') and run 'git lfs install'.`,
+				);
+			}
+		}
 
 		await execFileAsync(
 			getGitBinaryPath(),
@@ -119,7 +160,7 @@ export async function createWorktree(
 				branch,
 				startPoint,
 			],
-			{ timeout: 120_000 },
+			{ env, timeout: 120_000 },
 		);
 
 		console.log(
@@ -147,12 +188,13 @@ export async function createWorktree(
 			lowerError.includes("git-lfs") ||
 			lowerError.includes("filter-process") ||
 			lowerError.includes("smudge filter") ||
+			(lowerError.includes("lfs") && lowerError.includes("not")) ||
 			(lowerError.includes("lfs") && usesLfs);
 
 		if (isLfsError) {
 			throw new Error(
-				`Failed to create worktree: Git LFS operation failed. ` +
-					`This repository uses Git LFS for large files. Error: ${errorMessage}`,
+				`Failed to create worktree: This repository uses Git LFS, but git-lfs was not found or failed. ` +
+					`Please install git-lfs (e.g., 'brew install git-lfs') and run 'git lfs install'.`,
 			);
 		}
 
@@ -165,10 +207,13 @@ export async function removeWorktree(
 	worktreePath: string,
 ): Promise<void> {
 	try {
+		// Get merged environment (process.env + shell env for PATH)
+		const env = await getGitEnv();
+
 		await execFileAsync(
 			getGitBinaryPath(),
 			["-C", mainRepoPath, "worktree", "remove", worktreePath, "--force"],
-			{ timeout: 60_000 },
+			{ env, timeout: 60_000 },
 		);
 
 		console.log(`Removed worktree at ${worktreePath}`);
