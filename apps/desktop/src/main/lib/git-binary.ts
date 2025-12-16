@@ -1,13 +1,17 @@
-import type { SimpleGit, SimpleGitOptions } from "simple-git";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { app } from "electron";
+import simpleGit, { type SimpleGit } from "simple-git";
 
-// Dynamic require to prevent Vite from bundling dugite in the renderer process.
-// The trpc routers are shared code, but dugite can only run in main process.
-// Using eval('require') ensures Vite won't statically analyze this import.
+// Dynamic require for dugite - must stay dynamic so dugite isn't bundled
+// (dugite needs to be external so its __dirname resolves correctly)
 const dynamicRequire =
 	typeof require !== "undefined"
 		? require
 		: // biome-ignore lint/security/noGlobalEval: Required to prevent Vite bundling
 			(eval("require") as NodeRequire);
+
+console.log("[git-binary] Module loaded. app.isPackaged:", app.isPackaged);
 
 let cachedGitPath: string | null = null;
 let cachedGitExecPath: string | null = null;
@@ -18,15 +22,44 @@ const SIMPLE_GIT_BINARY_WARNING =
 
 /**
  * Returns the path to the bundled git binary.
- * Uses dugite's embedded git so we don't depend on system git
- * (avoids Xcode license issues on macOS, missing git on Windows, etc.)
+ *
+ * In development: Uses dugite's resolveGitBinary() which works correctly.
+ * In packaged app: Manually constructs the path to app.asar.unpacked because
+ * dugite's __dirname points inside app.asar, but binaries can't execute from there.
  */
 export function getGitBinaryPath(): string {
 	if (!cachedGitPath) {
-		const { resolveGitBinary } = dynamicRequire(
-			"dugite",
-		) as typeof import("dugite");
-		cachedGitPath = resolveGitBinary();
+		if (app.isPackaged) {
+			// In packaged app, construct path to unpacked dugite
+			// app.getAppPath() returns .../Resources/app.asar
+			// We need .../Resources/app.asar.unpacked/node_modules/dugite/git/bin/git
+			const appPath = app.getAppPath();
+			const unpackedPath = appPath.replace("app.asar", "app.asar.unpacked");
+			const gitBinary = process.platform === "win32" ? "git.exe" : "git";
+			cachedGitPath = join(
+				unpackedPath,
+				"node_modules",
+				"dugite",
+				"git",
+				"bin",
+				gitBinary,
+			);
+
+			console.log("[git-binary] Packaged app detected");
+			console.log("[git-binary] App path:", appPath);
+			console.log("[git-binary] Git binary path:", cachedGitPath);
+			console.log("[git-binary] Git binary exists:", existsSync(cachedGitPath));
+		} else {
+			// In development, use dugite's resolver
+			const { resolveGitBinary } = dynamicRequire(
+				"dugite",
+			) as typeof import("dugite");
+			cachedGitPath = resolveGitBinary();
+
+			console.log("[git-binary] Development mode");
+			console.log("[git-binary] Git binary path:", cachedGitPath);
+			console.log("[git-binary] Git binary exists:", existsSync(cachedGitPath));
+		}
 	}
 	return cachedGitPath;
 }
@@ -37,10 +70,29 @@ export function getGitBinaryPath(): string {
  */
 export function getGitExecPath(): string {
 	if (!cachedGitExecPath) {
-		const { resolveGitExecPath } = dynamicRequire(
-			"dugite",
-		) as typeof import("dugite");
-		cachedGitExecPath = resolveGitExecPath();
+		if (app.isPackaged) {
+			// In packaged app, construct path to unpacked dugite libexec
+			const appPath = app.getAppPath();
+			const unpackedPath = appPath.replace("app.asar", "app.asar.unpacked");
+			cachedGitExecPath = join(
+				unpackedPath,
+				"node_modules",
+				"dugite",
+				"git",
+				"libexec",
+				"git-core",
+			);
+
+			console.log("[git-binary] Git exec path:", cachedGitExecPath);
+		} else {
+			// In development, use dugite's resolver
+			const { resolveGitExecPath } = dynamicRequire(
+				"dugite",
+			) as typeof import("dugite");
+			cachedGitExecPath = resolveGitExecPath();
+
+			console.log("[git-binary] Git exec path:", cachedGitExecPath);
+		}
 	}
 	return cachedGitExecPath;
 }
@@ -53,24 +105,32 @@ export function getGitExecPath(): string {
  * instead of an error, but we suppress even the warning to reduce noise.
  */
 export function createBundledGit(baseDir?: string): SimpleGit {
-	const simpleGit = dynamicRequire("simple-git").default as (
-		opts?: Partial<SimpleGitOptions>,
-	) => SimpleGit;
-
-	// Temporarily suppress the specific warning from simple-git
-	const originalWarn = console.warn;
-	console.warn = (...args: unknown[]) => {
-		if (args[0] === SIMPLE_GIT_BINARY_WARNING) return;
-		originalWarn.apply(console, args);
-	};
+	console.log("[git-binary] createBundledGit called with baseDir:", baseDir);
 
 	try {
-		return simpleGit({
-			...(baseDir && { baseDir }),
-			binary: getGitBinaryPath(),
-			unsafe: { allowUnsafeCustomBinary: true },
-		});
-	} finally {
-		console.warn = originalWarn;
+		const gitPath = getGitBinaryPath();
+		console.log("[git-binary] Using git binary:", gitPath);
+
+		// Temporarily suppress the specific warning from simple-git
+		const originalWarn = console.warn;
+		console.warn = (...args: unknown[]) => {
+			if (args[0] === SIMPLE_GIT_BINARY_WARNING) return;
+			originalWarn.apply(console, args);
+		};
+
+		try {
+			const git = simpleGit({
+				...(baseDir && { baseDir }),
+				binary: gitPath,
+				unsafe: { allowUnsafeCustomBinary: true },
+			});
+			console.log("[git-binary] simpleGit instance created successfully");
+			return git;
+		} finally {
+			console.warn = originalWarn;
+		}
+	} catch (error) {
+		console.error("[git-binary] ERROR creating git instance:", error);
+		throw error;
 	}
 }
