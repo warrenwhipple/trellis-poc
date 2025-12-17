@@ -154,32 +154,32 @@ export function setupDataHandler(
 	let commandsSent = false;
 
 	session.pty.onData((data) => {
-		// Fast path: check if data contains any escape sequences
-		// Most plain text output has no ESC, so we can skip all filtering
+		// Check if filtering is needed (has ESC or filter has pending state from previous chunk)
 		const hasEsc = data.includes(ESC);
+		const needsFiltering = hasEsc || session.escapeFilter.hasPending();
 
-		if (!hasEsc) {
-			// No escape sequences - skip all filtering, direct passthrough
+		if (!needsFiltering) {
+			// Fast path: no escape sequences and no pending state - direct passthrough
 			session.dataBatcher.write(data);
 			session.scrollback.append(data);
 			session.historyWriter?.write(data);
 		} else {
-			// Slow path: data contains escape sequences, need to filter
+			// Slow path: data contains escape sequences or filter has pending state
 			// Check for clear scrollback sequences (ESC[3J, ESC c)
-			const hasClear = containsClearScrollbackSequence(data);
+			const hasClear = hasEsc && containsClearScrollbackSequence(data);
 			if (hasClear) {
 				session.scrollback.clear();
 				session.escapeFilter = new FastEscapeFilter();
 				onHistoryReinit().catch(() => {});
 			}
 
-			// Filter once: remove CPR/DA/OSC query responses but PRESERVE clear sequences
+			// Filter query responses (CPR, DA, OSC color responses, etc.)
 			const filtered = session.escapeFilter.filter(data);
 
-			// Send filtered data to renderer (clear sequences preserved for visual clearing)
+			// Send filtered data to renderer
 			session.dataBatcher.write(filtered);
 
-			// For history: apply extractContentAfterClear to the already-filtered result
+			// For history: apply extractContentAfterClear to the filtered result
 			const dataForHistory = hasClear
 				? extractContentAfterClear(filtered)
 				: filtered;

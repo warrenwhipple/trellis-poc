@@ -63,6 +63,25 @@ function isDigit(c: number): boolean {
 	return c >= 0x30 && c <= 0x39; // 0-9
 }
 
+// Convert number array to string in chunks to avoid argument limit explosion
+// String.fromCharCode.apply has a limit of ~32K-64K arguments depending on engine
+const CHUNK_SIZE = 32768;
+
+function charCodesToString(codes: number[]): string {
+	if (codes.length === 0) return "";
+	if (codes.length <= CHUNK_SIZE) {
+		return String.fromCharCode.apply(null, codes);
+	}
+
+	// Process in chunks for large arrays
+	const chunks: string[] = [];
+	for (let i = 0; i < codes.length; i += CHUNK_SIZE) {
+		const slice = codes.slice(i, i + CHUNK_SIZE);
+		chunks.push(String.fromCharCode.apply(null, slice));
+	}
+	return chunks.join("");
+}
+
 /**
  * Fast single-pass escape filter using a state machine.
  * Maintains buffer state for sequences split across chunks.
@@ -86,7 +105,7 @@ export class FastEscapeFilter {
 			this.processChar(c, output);
 		}
 
-		return String.fromCharCode(...output);
+		return charCodesToString(output);
 	}
 
 	private processChar(ch: number, output: number[]): void {
@@ -317,7 +336,7 @@ export class FastEscapeFilter {
 	 */
 	flush(): string {
 		if (this.pending.length === 0) return "";
-		const result = String.fromCharCode(...this.pending);
+		const result = charCodesToString(this.pending);
 		this.pending = [];
 		this.state = State.Normal;
 		return result;
@@ -329,5 +348,13 @@ export class FastEscapeFilter {
 	reset(): void {
 		this.pending = [];
 		this.state = State.Normal;
+	}
+
+	/**
+	 * Check if the filter has pending buffered data from a previous chunk.
+	 * Used to determine if filtering can be skipped for plain text.
+	 */
+	hasPending(): boolean {
+		return this.state !== State.Normal || this.pending.length > 0;
 	}
 }

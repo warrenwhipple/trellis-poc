@@ -162,6 +162,33 @@ describe("FastEscapeFilter", () => {
 		});
 	});
 
+	describe("hasPending", () => {
+		it("should return false initially", () => {
+			const filter = new FastEscapeFilter();
+			expect(filter.hasPending()).toBe(false);
+		});
+
+		it("should return false after processing plain text", () => {
+			const filter = new FastEscapeFilter();
+			filter.filter("hello world");
+			expect(filter.hasPending()).toBe(false);
+		});
+
+		it("should return true after processing incomplete sequence", () => {
+			const filter = new FastEscapeFilter();
+			filter.filter(`hello${ESC}[24`);
+			expect(filter.hasPending()).toBe(true);
+		});
+
+		it("should return false after sequence completes", () => {
+			const filter = new FastEscapeFilter();
+			filter.filter(`hello${ESC}[24`);
+			expect(filter.hasPending()).toBe(true);
+			filter.filter(";1Rworld");
+			expect(filter.hasPending()).toBe(false);
+		});
+	});
+
 	describe("plain text passthrough", () => {
 		it("should pass through plain text unchanged", () => {
 			const filter = new FastEscapeFilter();
