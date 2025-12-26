@@ -6,7 +6,7 @@ import {
 	users,
 } from "@superset/db/schema";
 import { inArray, sql } from "drizzle-orm";
-import type { PgColumn, PgTableWithColumns } from "drizzle-orm/pg-core";
+import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import { QueryBuilder } from "drizzle-orm/pg-core";
 
 export type AllowedTable =
@@ -20,11 +20,7 @@ interface WhereClause {
 	params: unknown[];
 }
 
-function build(
-	table: PgTableWithColumns<any>,
-	column: PgColumn,
-	ids: string[],
-): WhereClause {
+function build(table: PgTable, column: PgColumn, ids: string[]): WhereClause {
 	const whereExpr = inArray(sql`${sql.identifier(column.name)}`, ids);
 	const qb = new QueryBuilder();
 	const { sql: query, params } = qb
@@ -55,7 +51,6 @@ export async function buildWhereClause(
 			return build(organizations, organizations.id, orgIds);
 
 		case "users": {
-			// Get all user IDs from user's orgs
 			const members = await db.query.organizationMembers.findMany({
 				where: inArray(organizationMembers.organizationId, orgIds),
 				columns: { userId: true },

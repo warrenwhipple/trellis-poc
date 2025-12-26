@@ -34,12 +34,10 @@ export async function GET(request: Request): Promise<Response> {
 
 	const orgIds = memberships.map((m) => m.organizationId);
 
-	// Build Electric URL (ELECTRIC_URL already includes /v1/shape)
 	const originUrl = new URL(env.ELECTRIC_URL);
 	originUrl.searchParams.set("source_id", env.ELECTRIC_SOURCE_ID);
 	originUrl.searchParams.set("source_secret", env.ELECTRIC_SOURCE_SECRET);
 
-	// Only pass through Electric protocol params
 	const url = new URL(request.url);
 	url.searchParams.forEach((value, key) => {
 		if (ELECTRIC_PROTOCOL_QUERY_PARAMS.includes(key)) {
@@ -47,7 +45,6 @@ export async function GET(request: Request): Promise<Response> {
 		}
 	});
 
-	// Build WHERE clause based on table
 	const tableName = url.searchParams.get("table");
 	if (!tableName) {
 		return new Response("Missing table parameter", { status: 400 });
