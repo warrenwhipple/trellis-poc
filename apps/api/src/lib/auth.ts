@@ -17,7 +17,11 @@ async function verifyDesktopToken(token: string): Promise<string | null> {
 			return null;
 		}
 
-		return payload.sub as string;
+		if (typeof payload.sub !== "string") {
+			return null;
+		}
+
+		return payload.sub;
 	} catch {
 		return null;
 	}

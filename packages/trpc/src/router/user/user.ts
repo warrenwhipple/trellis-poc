@@ -1,6 +1,6 @@
 import { db } from "@superset/db/client";
 import { organizationMembers, users } from "@superset/db/schema";
-import type { TRPCRouterRecord } from "@trpc/server";
+import { TRPCError, type TRPCRouterRecord } from "@trpc/server";
 import { eq } from "drizzle-orm";
 
 import { protectedProcedure } from "../../trpc";
@@ -25,7 +25,10 @@ export const userRouter = {
 		});
 
 		if (!user) {
-			return null;
+			throw new TRPCError({
+				code: "INTERNAL_SERVER_ERROR",
+				message: "User record not found",
+			});
 		}
 
 		const membership = await db.query.organizationMembers.findFirst({
@@ -44,7 +47,10 @@ export const userRouter = {
 		});
 
 		if (!user) {
-			return [];
+			throw new TRPCError({
+				code: "INTERNAL_SERVER_ERROR",
+				message: "User record not found",
+			});
 		}
 
 		const memberships = await db.query.organizationMembers.findMany({

@@ -1,4 +1,5 @@
 export { type DrizzleDB, type PGliteWithExtensions, schema } from "./database";
-export { useDb, useTasks, useUsers } from "./hooks";
+export { useDb, useLiveDrizzle } from "./hooks";
 export { PGliteProvider, useActiveOrganization } from "./PGliteProvider";
 export type * from "./schema";
+export { tasks as tasksTable, users as usersTable } from "./schema";

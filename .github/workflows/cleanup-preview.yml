@@ -33,8 +33,6 @@ jobs:
         run: |
           flyctl apps destroy "superset-electric-pr-${{ github.event.pull_request.number }}" --yes
 
-      # Note: Vercel preview deployments auto-expire automatically
-
       - name: Update comment
         if: always()
         uses: thollander/actions-comment-pull-request@v3

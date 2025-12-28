@@ -25,14 +25,12 @@ export async function GET(request: Request): Promise<Response> {
 		return new Response("User not found", { status: 401 });
 	}
 
-	// Get the requested organization ID from query params
 	const url = new URL(request.url);
 	const organizationId = url.searchParams.get("organizationId");
 	if (!organizationId) {
 		return new Response("Missing organizationId parameter", { status: 400 });
 	}
 
-	// Verify user is a member of this organization
 	const membership = await db.query.organizationMembers.findFirst({
 		where: and(
 			eq(organizationMembers.userId, user.id),
@@ -68,7 +66,6 @@ export async function GET(request: Request): Promise<Response> {
 		originUrl.searchParams.set(`params[${index + 1}]`, String(value));
 	});
 
-	// Forward to Electric
 	const response = await fetch(originUrl.toString());
 
 	// Forward headers, but remove content-encoding/length per Electric docs

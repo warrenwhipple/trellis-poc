@@ -19,6 +19,7 @@ import {
 	SelectValue,
 } from "@superset/ui/select";
 import { Textarea } from "@superset/ui/textarea";
+import { desc, isNull } from "drizzle-orm";
 import { useState } from "react";
 import {
 	HiCalendar,
@@ -33,7 +34,9 @@ import {
 	PGliteProvider,
 	type SelectTask,
 	type TaskPriority,
-	useTasks,
+	tasksTable,
+	useDb,
+	useLiveDrizzle,
 } from "renderer/lib/pglite";
 import { trpc } from "renderer/lib/trpc";
 import { OrganizationSwitcher } from "./components/OrganizationSwitcher";
@@ -260,8 +263,15 @@ function TaskCard({
 
 function TasksList() {
 	const [editingTask, setEditingTask] = useState<Task | null>(null);
+	const db = useDb();
 
-	const result = useTasks();
+	const result = useLiveDrizzle(
+		db
+			.select()
+			.from(tasksTable)
+			.where(isNull(tasksTable.deleted_at))
+			.orderBy(desc(tasksTable.created_at)),
+	);
 	const tasks = result?.rows ?? [];
 
 	if (tasks.length === 0) {

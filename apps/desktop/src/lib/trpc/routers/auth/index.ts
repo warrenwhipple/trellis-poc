@@ -46,21 +46,26 @@ export const createAuthRouter = (getWindow: () => BrowserWindow | null) => {
 		onAccessToken: publicProcedure.subscription(() => {
 			return observable<{ accessToken: string | null }>((emit) => {
 				const emitToken = async () => {
-					const accessToken = await authService.getAccessToken();
-					emit.next({ accessToken });
+					try {
+						const accessToken = await authService.getAccessToken();
+						emit.next({ accessToken });
+					} catch (err) {
+						emit.error(err instanceof Error ? err : new Error(String(err)));
+					}
 				};
 
-				// Send initial token
-				emitToken();
+				const handler = () => {
+					void emitToken();
+				};
 
-				// Listen for token refreshes
-				authService.on("tokens-refreshed", emitToken);
-				// Also re-emit on auth state changes (sign in/out)
-				authService.on("state-changed", emitToken);
+				void emitToken();
+
+				authService.on("tokens-refreshed", handler);
+				authService.on("state-changed", handler);
 
 				return () => {
-					authService.off("tokens-refreshed", emitToken);
-					authService.off("state-changed", emitToken);
+					authService.off("tokens-refreshed", handler);
+					authService.off("state-changed", handler);
 				};
 			});
 		}),

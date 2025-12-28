@@ -50,12 +50,14 @@ export async function buildWhereClause(
 		case "organizations":
 			return build(organizations, organizations.id, organizationId);
 
-		// Users don't have organizationId - need to look up via membership
 		case "users": {
 			const members = await db.query.organizationMembers.findMany({
 				where: eq(organizationMembers.organizationId, organizationId),
 				columns: { userId: true },
 			});
+			if (members.length === 0) {
+				return { fragment: "1 = 0", params: [] };
+			}
 			const userIds = [...new Set(members.map((m) => m.userId))];
 			const whereExpr = inArray(sql`${sql.identifier(users.id.name)}`, userIds);
 			const qb = new QueryBuilder();

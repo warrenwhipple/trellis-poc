@@ -13,9 +13,6 @@ export const createUserRouter = () => {
 			return apiClient.user.me.query();
 		}),
 
-		/**
-		 * Get all organizations the user belongs to
-		 */
 		myOrganizations: publicProcedure.query(async () => {
 			return apiClient.user.myOrganizations.query();
 		}),

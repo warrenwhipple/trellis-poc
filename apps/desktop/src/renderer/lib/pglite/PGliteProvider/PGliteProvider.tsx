@@ -26,8 +26,6 @@ export function useActiveOrganization() {
 export function PGliteProvider({ children }: { children: ReactNode }) {
 	const organizations = useOrganizations();
 	const [accessToken, setAccessToken] = useState<string | null>(null);
-
-	// Initialize activeOrganizationId synchronously from localStorage
 	const [activeOrganizationId, setActiveOrganizationId] = useState<string>(
 		() => {
 			const stored = localStorage.getItem(ACTIVE_ORG_KEY);
@@ -36,7 +34,6 @@ export function PGliteProvider({ children }: { children: ReactNode }) {
 		},
 	);
 
-	// Should be guaranteed by the useState above
 	const activeOrganization = organizations.find(
 		(o) => o.id === activeOrganizationId,
 	);
@@ -44,27 +41,19 @@ export function PGliteProvider({ children }: { children: ReactNode }) {
 		throw new Error(`Active organization not found: ${activeOrganizationId}.`);
 	}
 
-	// Subscribe to access token
 	trpc.auth.onAccessToken.useSubscription(undefined, {
 		onData: ({ accessToken }) => setAccessToken(accessToken),
 	});
 
-	// Database + sync for active organization
 	const dbState = useOrganizationDatabase(activeOrganizationId, accessToken);
 
-	// Switch organization
 	const switchOrganization = (newOrganizationId: string) => {
 		localStorage.setItem(ACTIVE_ORG_KEY, newOrganizationId);
 		setActiveOrganizationId(newOrganizationId);
 	};
 
-	// Loading state
 	if (!dbState) {
-		return (
-			<div className="flex h-full items-center justify-center">
-				<div className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
-			</div>
-		);
+		return null;
 	}
 
 	return (

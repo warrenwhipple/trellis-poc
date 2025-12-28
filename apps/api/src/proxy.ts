@@ -6,9 +6,8 @@ import { env } from "./env";
 const allowedOrigins = [
 	env.NEXT_PUBLIC_WEB_URL,
 	env.NEXT_PUBLIC_ADMIN_URL,
-	// Desktop app dev server
-	"http://localhost:5927",
-];
+	env.NODE_ENV === "development" && "http://localhost:5927",
+].filter(Boolean);
 const isPublicRoute = createRouteMatcher(["/ingest(.*)", "/monitoring(.*)"]);
 
 function getCorsHeaders(origin: string | null) {

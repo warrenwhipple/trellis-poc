@@ -99,8 +99,7 @@ export async function GET(request: Request) {
 			},
 		});
 
-	// TODO: In production, use env.NEXT_PUBLIC_API_URL
-	const qstashBaseUrl = "https://e7e7cc5a4723.ngrok-free.app";
+	const qstashBaseUrl = env.NEXT_PUBLIC_API_URL;
 	try {
 		await qstash.publishJSON({
 			url: `${qstashBaseUrl}/api/integrations/linear/jobs/initial-sync`,
