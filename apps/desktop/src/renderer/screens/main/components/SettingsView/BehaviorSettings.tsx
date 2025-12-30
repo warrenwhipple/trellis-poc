@@ -2,7 +2,14 @@ import { Label } from "@superset/ui/label";
 import { Switch } from "@superset/ui/switch";
 import { trpc } from "renderer/lib/trpc";
 
-export function BehaviorSettings() {
+interface BehaviorSettingsProps {
+	visibleItems?: string[] | null;
+}
+
+export function BehaviorSettings({ visibleItems }: BehaviorSettingsProps) {
+	const showAll = !visibleItems;
+	const showConfirmQuit =
+		showAll || visibleItems?.includes("behavior-confirm-quit");
 	const utils = trpc.useUtils();
 	const { data: confirmOnQuit, isLoading } =
 		trpc.settings.getConfirmOnQuit.useQuery();
@@ -42,22 +49,24 @@ export function BehaviorSettings() {
 			</div>
 
 			<div className="space-y-6">
-				<div className="flex items-center justify-between">
-					<div className="space-y-0.5">
-						<Label htmlFor="confirm-on-quit" className="text-sm font-medium">
-							Confirm before quitting
-						</Label>
-						<p className="text-xs text-muted-foreground">
-							Show a confirmation dialog when quitting the app
-						</p>
+				{showConfirmQuit && (
+					<div className="flex items-center justify-between">
+						<div className="space-y-0.5">
+							<Label htmlFor="confirm-on-quit" className="text-sm font-medium">
+								Confirm before quitting
+							</Label>
+							<p className="text-xs text-muted-foreground">
+								Show a confirmation dialog when quitting the app
+							</p>
+						</div>
+						<Switch
+							id="confirm-on-quit"
+							checked={confirmOnQuit ?? true}
+							onCheckedChange={handleToggle}
+							disabled={isLoading || setConfirmOnQuit.isPending}
+						/>
 					</div>
-					<Switch
-						id="confirm-on-quit"
-						checked={confirmOnQuit ?? true}
-						onCheckedChange={handleToggle}
-						disabled={isLoading || setConfirmOnQuit.isPending}
-					/>
-				</div>
+				)}
 			</div>
 		</div>
 	);
