@@ -290,7 +290,10 @@ export const useTabsStore = create<TabsStore>()(
 
 					const newPanes = { ...state.panes };
 					for (const paneId of removedPaneIds) {
-						killTerminalForPane(paneId);
+						// P2: Only kill terminal for actual terminal panes (avoid unnecessary IPC)
+						if (state.panes[paneId]?.type === "terminal") {
+							killTerminalForPane(paneId);
+						}
 						delete newPanes[paneId];
 					}
 

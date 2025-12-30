@@ -68,7 +68,8 @@ export const createBranchesRouter = () => {
 
 				const git = simpleGit(input.worktreePath);
 
-				await git.checkout(input.branch);
+				// P2: Use -- to ensure branch is treated as refname, not flag
+				await git.checkout(["--", input.branch]);
 
 				// Update the branch in the worktree record
 				const gitStatus = worktree.gitStatus
