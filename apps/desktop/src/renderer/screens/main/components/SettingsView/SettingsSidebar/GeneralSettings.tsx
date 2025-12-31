@@ -15,100 +15,44 @@ interface GeneralSettingsProps {
 	matchCounts?: Record<SettingsSection, number> | null;
 }
 
+/**
+ * Sidebar section definitions.
+ * Search keywords are centralized in settings-search.ts - do not duplicate here.
+ */
 const GENERAL_SECTIONS: {
 	id: SettingsSection;
 	label: string;
 	icon: React.ReactNode;
-	keywords: string[];
 }[] = [
 	{
 		id: "account",
 		label: "Account",
 		icon: <HiOutlineUser className="h-4 w-4" />,
-		keywords: [
-			"profile",
-			"email",
-			"name",
-			"sign out",
-			"logout",
-			"version",
-			"update",
-			"check for updates",
-		],
 	},
 	{
 		id: "appearance",
 		label: "Appearance",
 		icon: <HiOutlinePaintBrush className="h-4 w-4" />,
-		keywords: [
-			"theme",
-			"dark",
-			"light",
-			"colors",
-			"custom themes",
-			"markdown",
-			"style",
-			"tufte",
-		],
 	},
 	{
 		id: "ringtones",
 		label: "Ringtones",
 		icon: <HiOutlineBell className="h-4 w-4" />,
-		keywords: [
-			"notification",
-			"sound",
-			"audio",
-			"alert",
-			"bell",
-			"tone",
-			"completed tasks",
-		],
 	},
 	{
 		id: "keyboard",
 		label: "Keyboard Shortcuts",
 		icon: <HiOutlineCommandLine className="h-4 w-4" />,
-		keywords: [
-			"hotkeys",
-			"keys",
-			"bindings",
-			"terminal",
-			"workspace",
-			"window",
-			"layout",
-			"commands",
-		],
 	},
 	{
 		id: "presets",
 		label: "Presets",
 		icon: <HiOutlineCog6Tooth className="h-4 w-4" />,
-		keywords: [
-			"terminal",
-			"commands",
-			"claude",
-			"codex",
-			"gemini",
-			"cursor",
-			"opencode",
-			"launch",
-			"agent",
-		],
 	},
 	{
 		id: "behavior",
 		label: "Behavior",
 		icon: <HiOutlineAdjustmentsHorizontal className="h-4 w-4" />,
-		keywords: [
-			"confirm",
-			"quit",
-			"quitting",
-			"dialog",
-			"preferences",
-			"exit",
-			"close",
-		],
 	},
 ];
 

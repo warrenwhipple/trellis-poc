@@ -1,15 +1,21 @@
 import { Label } from "@superset/ui/label";
 import { Switch } from "@superset/ui/switch";
 import { trpc } from "renderer/lib/trpc";
+import {
+	isItemVisible,
+	SETTING_ITEM_ID,
+	type SettingItemId,
+} from "./settings-search";
 
 interface BehaviorSettingsProps {
-	visibleItems?: string[] | null;
+	visibleItems?: SettingItemId[] | null;
 }
 
 export function BehaviorSettings({ visibleItems }: BehaviorSettingsProps) {
-	const showAll = !visibleItems;
-	const showConfirmQuit =
-		showAll || visibleItems?.includes("behavior-confirm-quit");
+	const showConfirmQuit = isItemVisible(
+		SETTING_ITEM_ID.BEHAVIOR_CONFIRM_QUIT,
+		visibleItems,
+	);
 	const utils = trpc.useUtils();
 	const { data: confirmOnQuit, isLoading } =
 		trpc.settings.getConfirmOnQuit.useQuery();

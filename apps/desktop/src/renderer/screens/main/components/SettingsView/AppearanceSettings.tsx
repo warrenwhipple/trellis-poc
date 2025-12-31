@@ -14,18 +14,30 @@ import {
 	useThemeStore,
 } from "renderer/stores";
 import { builtInThemes } from "shared/themes";
+import {
+	isItemVisible,
+	SETTING_ITEM_ID,
+	type SettingItemId,
+} from "./settings-search";
 import { ThemeCard } from "./ThemeCard";
 
 interface AppearanceSettingsProps {
-	visibleItems?: string[] | null;
+	visibleItems?: SettingItemId[] | null;
 }
 
 export function AppearanceSettings({ visibleItems }: AppearanceSettingsProps) {
-	const showAll = !visibleItems;
-	const showTheme = showAll || visibleItems?.includes("appearance-theme");
-	const showMarkdown = showAll || visibleItems?.includes("appearance-markdown");
-	const showCustomThemes =
-		showAll || visibleItems?.includes("appearance-custom-themes");
+	const showTheme = isItemVisible(
+		SETTING_ITEM_ID.APPEARANCE_THEME,
+		visibleItems,
+	);
+	const showMarkdown = isItemVisible(
+		SETTING_ITEM_ID.APPEARANCE_MARKDOWN,
+		visibleItems,
+	);
+	const showCustomThemes = isItemVisible(
+		SETTING_ITEM_ID.APPEARANCE_CUSTOM_THEMES,
+		visibleItems,
+	);
 	const activeThemeId = useThemeId();
 	const setTheme = useSetTheme();
 	const customThemes = useThemeStore((state) => state.customThemes);

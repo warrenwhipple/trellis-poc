@@ -5,16 +5,29 @@ import { toast } from "@superset/ui/sonner";
 import { HiOutlineClipboardDocument } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
 import { AUTO_UPDATE_STATUS } from "shared/auto-update";
+import {
+	isItemVisible,
+	SETTING_ITEM_ID,
+	type SettingItemId,
+} from "../settings-search";
 
 interface AccountSettingsProps {
-	visibleItems?: string[] | null;
+	visibleItems?: SettingItemId[] | null;
 }
 
 export function AccountSettings({ visibleItems }: AccountSettingsProps) {
-	const showAll = !visibleItems;
-	const showProfile = showAll || visibleItems?.includes("account-profile");
-	const showVersion = showAll || visibleItems?.includes("account-version");
-	const showSignOut = showAll || visibleItems?.includes("account-signout");
+	const showProfile = isItemVisible(
+		SETTING_ITEM_ID.ACCOUNT_PROFILE,
+		visibleItems,
+	);
+	const showVersion = isItemVisible(
+		SETTING_ITEM_ID.ACCOUNT_VERSION,
+		visibleItems,
+	);
+	const showSignOut = isItemVisible(
+		SETTING_ITEM_ID.ACCOUNT_SIGNOUT,
+		visibleItems,
+	);
 	const { data: user, isLoading } = trpc.user.me.useQuery();
 	const { data: version } = trpc.autoUpdate.getVersion.useQuery();
 	const { data: updateStatus } = trpc.autoUpdate.getStatus.useQuery();

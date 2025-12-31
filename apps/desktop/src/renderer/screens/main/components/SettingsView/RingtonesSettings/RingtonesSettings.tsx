@@ -8,6 +8,11 @@ import {
 	useSelectedRingtoneId,
 	useSetRingtone,
 } from "renderer/stores";
+import {
+	isItemVisible,
+	SETTING_ITEM_ID,
+	type SettingItemId,
+} from "../settings-search";
 
 function formatDuration(seconds: number): string {
 	return `${seconds}s`;
@@ -150,13 +155,14 @@ function RingtoneCard({
 }
 
 interface RingtonesSettingsProps {
-	visibleItems?: string[] | null;
+	visibleItems?: SettingItemId[] | null;
 }
 
 export function RingtonesSettings({ visibleItems }: RingtonesSettingsProps) {
-	const showAll = !visibleItems;
-	const showNotification =
-		showAll || visibleItems?.includes("ringtones-notification");
+	const showNotification = isItemVisible(
+		SETTING_ITEM_ID.RINGTONES_NOTIFICATION,
+		visibleItems,
+	);
 	const selectedRingtoneId = useSelectedRingtoneId();
 	const setRingtone = useSetRingtone();
 	const [playingId, setPlayingId] = useState<string | null>(null);
