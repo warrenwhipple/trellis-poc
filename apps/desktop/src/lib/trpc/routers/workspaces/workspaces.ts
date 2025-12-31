@@ -7,7 +7,7 @@ import {
 	workspaces,
 	worktrees,
 } from "@superset/local-db";
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, not } from "drizzle-orm";
 import { track } from "main/lib/analytics";
 import { localDb } from "main/lib/local-db";
 import { terminalManager } from "main/lib/terminal";
@@ -305,22 +305,10 @@ export const createWorkspacesRouter = () => {
 					};
 				}
 
-				// Shift existing workspaces to make room at front
-				const projectWorkspaces = localDb
-					.select()
-					.from(workspaces)
-					.where(eq(workspaces.projectId, input.projectId))
-					.all();
-				for (const ws of projectWorkspaces) {
-					localDb
-						.update(workspaces)
-						.set({ tabOrder: ws.tabOrder + 1 })
-						.where(eq(workspaces.id, ws.id))
-						.run();
-				}
-
-				// Insert new workspace with conflict handling for race conditions
+				// Insert new workspace first with conflict handling for race conditions
 				// The unique partial index (projectId WHERE type='branch') prevents duplicates
+				// We insert first, then shift - this prevents race conditions where
+				// concurrent calls both shift before either inserts (causing double shifts)
 				const insertResult = localDb
 					.insert(workspaces)
 					.values({
@@ -333,6 +321,32 @@ export const createWorkspacesRouter = () => {
 					.onConflictDoNothing()
 					.returning()
 					.all();
+
+				const wasExisting = insertResult.length === 0;
+
+				// Only shift existing workspaces if we successfully inserted
+				// Losers of the race should NOT shift (they didn't create anything)
+				if (!wasExisting) {
+					const newWorkspaceId = insertResult[0].id;
+					const projectWorkspaces = localDb
+						.select()
+						.from(workspaces)
+						.where(
+							and(
+								eq(workspaces.projectId, input.projectId),
+								// Exclude the workspace we just inserted
+								not(eq(workspaces.id, newWorkspaceId)),
+							),
+						)
+						.all();
+					for (const ws of projectWorkspaces) {
+						localDb
+							.update(workspaces)
+							.set({ tabOrder: ws.tabOrder + 1 })
+							.where(eq(workspaces.id, ws.id))
+							.run();
+					}
+				}
 
 				// If insert returned nothing, another concurrent call won the race
 				// Fetch the existing workspace instead
@@ -352,8 +366,6 @@ export const createWorkspacesRouter = () => {
 				if (!workspace) {
 					throw new Error("Failed to create or find branch workspace");
 				}
-
-				const wasExisting = insertResult.length === 0;
 
 				// Update settings
 				localDb

@@ -6,15 +6,12 @@ import { localDb } from "main/lib/local-db";
 /**
  * Security model for desktop app filesystem access:
  *
- * THREAT MODEL ASSUMPTION:
- * A compromised renderer can already execute arbitrary commands via
- * terminal panes. Therefore, filesystem-level symlink protections
- * provide no meaningful security boundary—an attacker with renderer
- * access can simply run `cat /etc/passwd` in a terminal.
- *
- * If your deployment exposes the renderer to untrusted content WITHOUT
- * terminal access, this model does NOT apply and symlink escape checks
- * should be re-enabled.
+ * THREAT MODEL:
+ * While a compromised renderer can execute commands via terminal panes,
+ * the File Viewer presents a distinct threat: malicious repositories can
+ * contain symlinks that trick users into reading/writing sensitive files
+ * (e.g., `docs/config.yml` → `~/.bashrc`). Users clicking these links
+ * don't know they're accessing files outside the repo.
  *
  * PRIMARY BOUNDARY: assertRegisteredWorktree()
  * - Only worktree paths registered in localDb are accessible via tRPC
@@ -24,9 +21,9 @@ import { localDb } from "main/lib/local-db";
  * - Rejects absolute paths and ".." traversal segments
  * - Defense in depth against path manipulation
  *
- * NOT IMPLEMENTED (intentional, see threat model above):
- * - Symlink escape detection
- * - Realpath resolution
+ * SYMLINK PROTECTION (secure-fs.ts):
+ * - Writes: Block if realpath escapes worktree (prevents accidental overwrites)
+ * - Reads: Caller can check isSymlinkEscaping() to warn users
  */
 
 /**
@@ -36,7 +33,8 @@ export type PathValidationErrorCode =
 	| "ABSOLUTE_PATH"
 	| "PATH_TRAVERSAL"
 	| "UNREGISTERED_WORKTREE"
-	| "INVALID_TARGET";
+	| "INVALID_TARGET"
+	| "SYMLINK_ESCAPE";
 
 /**
  * Error thrown when path validation fails.

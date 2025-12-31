@@ -1,5 +1,5 @@
 -- Dedupe existing duplicate branch workspaces before creating unique index.
--- Keep the oldest one (smallest id) as the deterministic winner.
+-- Keep the most recently used one (highest last_opened_at), with id ASC as tiebreaker.
 -- First, update settings.last_active_workspace_id if it points to a workspace we're about to delete
 UPDATE settings
 SET last_active_workspace_id = (
@@ -8,7 +8,7 @@ SET last_active_workspace_id = (
     AND w1.project_id = (
         SELECT w2.project_id FROM workspaces w2 WHERE w2.id = settings.last_active_workspace_id
     )
-    ORDER BY w1.id ASC
+    ORDER BY w1.last_opened_at DESC NULLS LAST, w1.id ASC
     LIMIT 1
 )
 WHERE last_active_workspace_id IN (
@@ -18,15 +18,28 @@ WHERE last_active_workspace_id IN (
         SELECT 1 FROM workspaces w2
         WHERE w2.type = 'branch'
         AND w2.project_id = w1.project_id
-        AND w2.id < w1.id
+        AND (
+            w2.last_opened_at > w1.last_opened_at
+            OR (w2.last_opened_at = w1.last_opened_at AND w2.id < w1.id)
+            OR (w2.last_opened_at IS NOT NULL AND w1.last_opened_at IS NULL)
+        )
     )
 );
 
--- Delete duplicate branch workspaces, keeping the oldest (smallest id) per project
+-- Delete duplicate branch workspaces, keeping the most recently used per project
+-- Survivor selection: highest last_opened_at, then lowest id as tiebreaker
 DELETE FROM workspaces
 WHERE type = 'branch'
 AND id NOT IN (
-    SELECT MIN(id) FROM workspaces WHERE type = 'branch' GROUP BY project_id
+    SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+            PARTITION BY project_id
+            ORDER BY last_opened_at DESC NULLS LAST, id ASC
+        ) as rn
+        FROM workspaces
+        WHERE type = 'branch'
+    ) ranked
+    WHERE rn = 1
 );
 
 -- Now safe to create the unique index
