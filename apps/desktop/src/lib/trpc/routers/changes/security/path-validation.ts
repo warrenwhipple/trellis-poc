@@ -1,5 +1,5 @@
 import { isAbsolute, normalize, resolve, sep } from "node:path";
-import { worktrees } from "@superset/local-db";
+import { projects, worktrees } from "@superset/local-db";
 import { eq } from "drizzle-orm";
 import { localDb } from "main/lib/local-db";
 
@@ -53,28 +53,47 @@ export class PathValidationError extends Error {
 }
 
 /**
- * Validates that a worktree path is registered in localDb.
+ * Validates that a workspace path is registered in localDb.
  * This is THE critical security boundary.
  *
- * @throws PathValidationError if worktree is not registered
+ * Accepts:
+ * - Worktree paths (from worktrees table)
+ * - Project mainRepoPath (for branch workspaces that work on the main repo)
+ *
+ * @throws PathValidationError if path is not registered
  */
-export function assertRegisteredWorktree(worktreePath: string): void {
-	const exists = localDb
+export function assertRegisteredWorktree(workspacePath: string): void {
+	// Check worktrees table first (most common case)
+	const worktreeExists = localDb
 		.select()
 		.from(worktrees)
-		.where(eq(worktrees.path, worktreePath))
+		.where(eq(worktrees.path, workspacePath))
 		.get();
 
-	if (!exists) {
-		throw new PathValidationError(
-			"Worktree not registered in database",
-			"UNREGISTERED_WORKTREE",
-		);
+	if (worktreeExists) {
+		return;
 	}
+
+	// Check projects.mainRepoPath for branch workspaces
+	const projectExists = localDb
+		.select()
+		.from(projects)
+		.where(eq(projects.mainRepoPath, workspacePath))
+		.get();
+
+	if (projectExists) {
+		return;
+	}
+
+	throw new PathValidationError(
+		"Workspace path not registered in database",
+		"UNREGISTERED_WORKTREE",
+	);
 }
 
 /**
  * Gets the worktree record if registered. Returns record for updates.
+ * Only works for actual worktrees, not project mainRepoPath.
  *
  * @throws PathValidationError if worktree is not registered
  */

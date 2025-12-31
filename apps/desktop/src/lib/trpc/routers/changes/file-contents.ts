@@ -84,7 +84,7 @@ export const createFileContentsRouter = () => {
 				}),
 			)
 			.mutation(async ({ input }): Promise<{ success: boolean }> => {
-				// secureFs.writeFile handles all validation including symlink checks
+				// secureFs.writeFile validates worktree registration and path traversal
 				await secureFs.writeFile(
 					input.worktreePath,
 					input.filePath,
