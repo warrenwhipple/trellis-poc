@@ -35,7 +35,7 @@ function GroupItem({
 						className={cn(
 							"flex items-center gap-1.5 rounded-t-md transition-all w-full shrink-0 pl-3 pr-6 h-[80%]",
 							isActive
-								? "text-foreground bg-tertiary-active"
+								? "text-foreground border-b-2 border-border"
 								: "text-muted-foreground hover:text-foreground hover:bg-tertiary/30",
 						)}
 					>
@@ -132,7 +132,7 @@ export function GroupStrip() {
 	};
 
 	return (
-		<div className="flex items-end gap-1 px-2 h-10 bg-background shrink-0">
+		<div className="flex items-end gap-1 px-2 h-10 flex-1 min-w-0">
 			{tabs.length > 0 && (
 				<div className="flex items-end gap-0.5 h-full overflow-x-auto scrollbar-none">
 					{tabs.map((tab) => (
