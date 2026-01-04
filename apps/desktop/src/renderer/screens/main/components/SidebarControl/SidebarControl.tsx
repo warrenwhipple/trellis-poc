@@ -14,7 +14,9 @@ export function SidebarControl() {
 					variant="ghost"
 					size="icon"
 					onClick={toggleSidebar}
-					aria-label={isSidebarOpen ? "Hide Changes Sidebar" : "Show Changes Sidebar"}
+					aria-label={
+						isSidebarOpen ? "Hide Changes Sidebar" : "Show Changes Sidebar"
+					}
 					className="no-drag"
 				>
 					{isSidebarOpen ? (
