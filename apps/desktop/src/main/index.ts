@@ -16,6 +16,7 @@ import { localDb } from "./lib/local-db";
 import {
 	getActiveTerminalManager,
 	reconcileDaemonSessions,
+	shutdownOrphanedDaemon,
 } from "./lib/terminal";
 import { MainWindow } from "./windows/main";
 
@@ -215,6 +216,10 @@ if (!gotTheLock) {
 		// Clean up stale daemon sessions from previous app runs
 		// Must happen BEFORE renderer restore runs
 		await reconcileDaemonSessions();
+
+		// Shutdown orphaned daemon if persistence is disabled
+		// (cleans up daemon left from previous session with persistence enabled)
+		await shutdownOrphanedDaemon();
 
 		await authService.initialize();
 
