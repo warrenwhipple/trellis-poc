@@ -14,9 +14,22 @@ interface RegisteredSession {
 	workspaceId: string;
 }
 
+/**
+ * Daemon session registration for port scanning.
+ * Unlike RegisteredSession, this tracks sessions in the daemon process
+ * where we only have the PID (not a TerminalSession object).
+ */
+interface DaemonSession {
+	workspaceId: string;
+	/** PTY process ID - null if not yet spawned or exited */
+	pid: number | null;
+}
+
 class PortManager extends EventEmitter {
 	private ports = new Map<string, DetectedPort>();
 	private sessions = new Map<string, RegisteredSession>();
+	/** Daemon-mode sessions: paneId → { workspaceId, pid } */
+	private daemonSessions = new Map<string, DaemonSession>();
 	private scanInterval: ReturnType<typeof setInterval> | null = null;
 	private pendingHintScans = new Map<string, ReturnType<typeof setTimeout>>();
 	private isScanning = false;
@@ -38,6 +51,34 @@ class PortManager extends EventEmitter {
 	 */
 	unregisterSession(paneId: string): void {
 		this.sessions.delete(paneId);
+		this.removePortsForPane(paneId);
+
+		// Cancel any pending hint scan for this pane
+		const pendingTimeout = this.pendingHintScans.get(paneId);
+		if (pendingTimeout) {
+			clearTimeout(pendingTimeout);
+			this.pendingHintScans.delete(paneId);
+		}
+	}
+
+	/**
+	 * Register or update a daemon-mode terminal session for port scanning.
+	 * Use this when the terminal runs in the daemon process (terminal persistence mode).
+	 * Can be called multiple times to update the PID when it becomes available or changes.
+	 */
+	upsertDaemonSession(
+		paneId: string,
+		workspaceId: string,
+		pid: number | null,
+	): void {
+		this.daemonSessions.set(paneId, { workspaceId, pid });
+	}
+
+	/**
+	 * Unregister a daemon-mode terminal session and remove its ports
+	 */
+	unregisterDaemonSession(paneId: string): void {
+		this.daemonSessions.delete(paneId);
 		this.removePortsForPane(paneId);
 
 		// Cancel any pending hint scan for this pane
@@ -80,7 +121,62 @@ class PortManager extends EventEmitter {
 	}
 
 	/**
-	 * Scan all registered sessions for ports
+	 * Scan a specific pane for ports.
+	 * Works for both regular sessions (with TerminalSession) and daemon sessions (with PID only).
+	 */
+	private async scanPane(paneId: string): Promise<void> {
+		// Check regular sessions first
+		const registered = this.sessions.get(paneId);
+		if (registered) {
+			const { session, workspaceId } = registered;
+			if (!session.isAlive) return;
+
+			try {
+				const pid = session.pty.pid;
+				const pids = await getProcessTree(pid);
+				if (pids.length === 0) {
+					// Self-healing: process tree is gone, clear ports
+					this.removePortsForPane(paneId);
+					return;
+				}
+
+				const portInfos = getListeningPortsForPids(pids);
+				this.updatePortsForPane(paneId, workspaceId, portInfos);
+			} catch (error) {
+				console.error(`[PortManager] Error scanning pane ${paneId}:`, error);
+			}
+			return;
+		}
+
+		// Check daemon sessions
+		const daemonSession = this.daemonSessions.get(paneId);
+		if (daemonSession) {
+			const { workspaceId, pid } = daemonSession;
+			// Skip if PID not yet available (PTY not spawned)
+			if (pid === null) return;
+
+			try {
+				const pids = await getProcessTree(pid);
+				if (pids.length === 0) {
+					// Self-healing: process tree is gone, clear ports
+					this.removePortsForPane(paneId);
+					return;
+				}
+
+				const portInfos = getListeningPortsForPids(pids);
+				this.updatePortsForPane(paneId, workspaceId, portInfos);
+			} catch (error) {
+				console.error(
+					`[PortManager] Error scanning daemon pane ${paneId}:`,
+					error,
+				);
+			}
+		}
+	}
+
+	/**
+	 * Scan all registered sessions for ports.
+	 * Includes both regular sessions and daemon sessions.
 	 */
 	private async scanAllSessions(): Promise<void> {
 		if (this.isScanning) return;
@@ -91,7 +187,10 @@ class PortManager extends EventEmitter {
 				string,
 				{ workspaceId: string; pids: number[] }
 			>();
+			// Track panes with empty process trees for self-healing
+			const emptyTreePanes = new Set<string>();
 
+			// Scan regular sessions
 			for (const [paneId, { session, workspaceId }] of this.sessions) {
 				if (!session.isAlive) continue;
 
@@ -100,19 +199,51 @@ class PortManager extends EventEmitter {
 					const pids = await getProcessTree(pid);
 					if (pids.length > 0) {
 						panePortMap.set(paneId, { workspaceId, pids });
+					} else {
+						// Process tree is gone - mark for self-healing
+						emptyTreePanes.add(paneId);
 					}
 				} catch {
 					// Session may have exited
 				}
 			}
 
+			// Scan daemon sessions
+			for (const [paneId, { workspaceId, pid }] of this.daemonSessions) {
+				// Skip if PID not yet available
+				if (pid === null) continue;
+
+				try {
+					const pids = await getProcessTree(pid);
+					if (pids.length > 0) {
+						panePortMap.set(paneId, { workspaceId, pids });
+					} else {
+						// Process tree is gone - mark for self-healing
+						emptyTreePanes.add(paneId);
+					}
+				} catch {
+					// Session may have exited
+				}
+			}
+
+			// Update ports for panes with active processes
 			for (const [paneId, { workspaceId, pids }] of panePortMap) {
 				const portInfos = await getListeningPortsForPids(pids);
 				this.updatePortsForPane(paneId, workspaceId, portInfos);
 			}
 
+			// Self-healing: clear ports for panes with empty process trees
+			for (const paneId of emptyTreePanes) {
+				this.removePortsForPane(paneId);
+			}
+
+			// Cleanup: remove ports for panes that are no longer registered
+			// (not in sessions AND not in daemonSessions)
 			for (const [key, port] of this.ports) {
-				if (!this.sessions.has(port.paneId)) {
+				const isRegistered =
+					this.sessions.has(port.paneId) ||
+					this.daemonSessions.has(port.paneId);
+				if (!isRegistered) {
 					this.ports.delete(key);
 					this.emit("port:remove", port);
 				}
