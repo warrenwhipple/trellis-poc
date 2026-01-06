@@ -10,6 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
 	existsSync,
@@ -148,16 +149,21 @@ export interface TerminalHostClientEvents {
  * Emits events for terminal data and exit.
  */
 export class TerminalHostClient extends EventEmitter {
-	private socket: Socket | null = null;
-	private parser = new NdjsonParser();
+	private controlSocket: Socket | null = null;
+	private streamSocket: Socket | null = null;
+	private controlParser = new NdjsonParser();
+	private streamParser = new NdjsonParser();
 	private pendingRequests = new Map<string, PendingRequest>();
 	private requestCounter = 0;
-	private authenticated = false;
+	private controlAuthenticated = false;
+	private streamAuthenticated = false;
 	private connectionState = ConnectionState.DISCONNECTED;
 	private disposed = false;
 	private notifyQueue: string[] = [];
 	private notifyQueueBytes = 0;
 	private notifyDrainArmed = false;
+	private disconnectArmed = false;
+	private clientId = randomUUID();
 
 	// ===========================================================================
 	// Connection Management
@@ -171,8 +177,10 @@ export class TerminalHostClient extends EventEmitter {
 		// Already connected - fast path (no logging to avoid noise on every API call)
 		if (
 			this.connectionState === ConnectionState.CONNECTED &&
-			this.socket &&
-			this.authenticated
+			this.controlSocket &&
+			this.streamSocket &&
+			this.controlAuthenticated &&
+			this.streamAuthenticated
 		) {
 			return;
 		}
@@ -191,8 +199,10 @@ export class TerminalHostClient extends EventEmitter {
 				const checkConnection = () => {
 					if (
 						this.connectionState === ConnectionState.CONNECTED &&
-						this.socket &&
-						this.authenticated
+						this.controlSocket &&
+						this.streamSocket &&
+						this.controlAuthenticated &&
+						this.streamAuthenticated
 					) {
 						resolve();
 					} else if (this.connectionState === ConnectionState.DISCONNECTED) {
@@ -212,49 +222,19 @@ export class TerminalHostClient extends EventEmitter {
 		}
 
 		this.connectionState = ConnectionState.CONNECTING;
+		this.disconnectArmed = false;
 		if (DEBUG_CLIENT) {
 			console.log("[TerminalHostClient] Connecting to daemon...");
 		}
 
 		try {
-			// Try to connect to existing daemon
-			let connected = await this.tryConnect();
-			if (DEBUG_CLIENT) {
-				console.log(
-					`[TerminalHostClient] Initial connection attempt: ${connected ? "SUCCESS" : "FAILED"}`,
-				);
-			}
-
-			if (!connected) {
-				// Spawn daemon and retry
-				if (DEBUG_CLIENT) {
-					console.log("[TerminalHostClient] Spawning daemon...");
-				}
-				await this.spawnDaemon();
-				connected = await this.tryConnect();
-				if (DEBUG_CLIENT) {
-					console.log(
-						`[TerminalHostClient] Post-spawn connection attempt: ${connected ? "SUCCESS" : "FAILED"}`,
-					);
-				}
-
-				if (!connected) {
-					throw new Error("Failed to connect to daemon after spawn");
-				}
-			}
-
-			// Authenticate
-			if (DEBUG_CLIENT) {
-				console.log("[TerminalHostClient] Authenticating...");
-			}
-			await this.authenticate();
-			if (DEBUG_CLIENT) {
-				console.log("[TerminalHostClient] Authentication successful!");
-			}
-
+			await this.connectAndAuthenticate();
 			this.connectionState = ConnectionState.CONNECTED;
+			this.disconnectArmed = false;
+			this.emit("connected");
 		} catch (error) {
-			this.connectionState = ConnectionState.DISCONNECTED;
+			// Reset without emitting disconnected (connection never became usable)
+			this.resetConnectionState({ emitDisconnected: false });
 			throw error;
 		}
 	}
@@ -265,14 +245,8 @@ export class TerminalHostClient extends EventEmitter {
 	 * This is useful for cleanup operations that should only act on existing daemons.
 	 */
 	async tryConnectAndAuthenticate(): Promise<boolean> {
-		// Already connected and authenticated
-		if (
-			this.connectionState === ConnectionState.CONNECTED &&
-			this.socket &&
-			this.authenticated
-		) {
-			return true;
-		}
+		// Already connected and authenticated (control socket is sufficient here)
+		if (this.controlSocket && this.controlAuthenticated) return true;
 
 		// Don't interfere with an in-progress connection
 		if (this.connectionState === ConnectionState.CONNECTING) {
@@ -282,26 +256,73 @@ export class TerminalHostClient extends EventEmitter {
 		this.connectionState = ConnectionState.CONNECTING;
 
 		try {
-			const connected = await this.tryConnect();
+			const connected = await this.tryConnectControl();
 			if (!connected) {
-				this.connectionState = ConnectionState.DISCONNECTED;
+				this.resetConnectionState({ emitDisconnected: false });
 				return false;
 			}
 
-			await this.authenticate();
-			this.connectionState = ConnectionState.CONNECTED;
+			const token = this.readAuthToken();
+			await this.authenticateControl({ token });
+			this.connectionState = ConnectionState.CONNECTED; // control-only
 			return true;
-		} catch {
-			this.connectionState = ConnectionState.DISCONNECTED;
+		} catch (_error) {
+			this.resetConnectionState({ emitDisconnected: false });
 			return false;
 		}
 	}
 
 	/**
-	 * Try to connect to the daemon socket.
-	 * Returns true if connected, false if daemon not running.
+	 * Connect and authenticate both control + stream sockets.
+	 * Handles protocol mismatch by shutting down a legacy daemon and retrying once.
 	 */
-	private async tryConnect(): Promise<boolean> {
+	private async connectAndAuthenticate(): Promise<void> {
+		const token = this.readAuthToken();
+
+		for (let attempt = 0; attempt < 2; attempt++) {
+			// Control socket (RPC)
+			let controlConnected = await this.tryConnectControl();
+			if (!controlConnected) {
+				await this.spawnDaemon();
+				controlConnected = await this.tryConnectControl();
+				if (!controlConnected) {
+					throw new Error("Failed to connect control socket after spawn");
+				}
+			}
+
+			try {
+				await this.authenticateControl({ token });
+			} catch (error) {
+				if (attempt === 0 && this.isProtocolMismatchError(error)) {
+					if (DEBUG_CLIENT) {
+						console.log(
+							"[TerminalHostClient] Protocol mismatch detected, shutting down legacy daemon...",
+						);
+					}
+					this.resetConnectionState({ emitDisconnected: false });
+					await this.shutdownLegacyDaemon();
+					await this.waitForDaemonShutdown();
+					await this.spawnDaemon();
+					continue;
+				}
+				throw error;
+			}
+
+			// Stream socket (events)
+			const streamConnected = await this.tryConnectStream();
+			if (!streamConnected) {
+				throw new Error("Failed to connect stream socket");
+			}
+
+			await this.authenticateStream({ token });
+			this.setupStreamSocketHandlers();
+			return;
+		}
+
+		throw new Error("Failed to connect after protocol upgrade");
+	}
+
+	private async tryConnectControl(): Promise<boolean> {
 		return new Promise((resolve) => {
 			if (!existsSync(SOCKET_PATH)) {
 				resolve(false);
@@ -323,8 +344,8 @@ export class TerminalHostClient extends EventEmitter {
 				if (!resolved) {
 					resolved = true;
 					clearTimeout(timeout);
-					this.socket = socket;
-					this.setupSocketHandlers();
+					this.controlSocket = socket;
+					this.setupControlSocketHandlers();
 					resolve(true);
 				}
 			});
@@ -339,32 +360,86 @@ export class TerminalHostClient extends EventEmitter {
 		});
 	}
 
-	/**
-	 * Set up socket event handlers
-	 */
-	private setupSocketHandlers(): void {
-		if (!this.socket) return;
+	private async tryConnectStream(): Promise<boolean> {
+		return new Promise((resolve) => {
+			if (!existsSync(SOCKET_PATH)) {
+				resolve(false);
+				return;
+			}
 
-		this.socket.setEncoding("utf-8");
+			const socket = connect(SOCKET_PATH);
+			let resolved = false;
 
-		this.socket.on("data", (data: string) => {
-			const messages = this.parser.parse(data);
+			const timeout = setTimeout(() => {
+				if (!resolved) {
+					resolved = true;
+					socket.destroy();
+					resolve(false);
+				}
+			}, CONNECT_TIMEOUT_MS);
+
+			socket.on("connect", () => {
+				if (!resolved) {
+					resolved = true;
+					clearTimeout(timeout);
+					socket.setEncoding("utf-8");
+					socket.on("close", () => this.handleDisconnect());
+					socket.on("error", (error) => {
+						this.emit(
+							"error",
+							error instanceof Error ? error : new Error(String(error)),
+						);
+						this.handleDisconnect();
+					});
+					this.streamSocket = socket;
+					resolve(true);
+				}
+			});
+
+			socket.on("error", () => {
+				if (!resolved) {
+					resolved = true;
+					clearTimeout(timeout);
+					resolve(false);
+				}
+			});
+		});
+	}
+
+	private setupControlSocketHandlers(): void {
+		if (!this.controlSocket) return;
+
+		this.controlSocket.setEncoding("utf-8");
+
+		this.controlSocket.on("data", (data: string) => {
+			const messages = this.controlParser.parse(data);
 			for (const message of messages) {
 				this.handleMessage(message);
 			}
 		});
 
-		this.socket.on("drain", () => {
+		this.controlSocket.on("drain", () => {
 			this.flushNotifyQueue();
 		});
 
-		this.socket.on("close", () => {
+		this.controlSocket.on("close", () => {
 			this.handleDisconnect();
 		});
 
-		this.socket.on("error", (error) => {
+		this.controlSocket.on("error", (error) => {
 			this.emit("error", error);
 			this.handleDisconnect();
+		});
+	}
+
+	private setupStreamSocketHandlers(): void {
+		if (!this.streamSocket) return;
+
+		this.streamSocket.on("data", (data: string) => {
+			const messages = this.streamParser.parse(data);
+			for (const message of messages) {
+				this.handleMessage(message);
+			}
 		});
 	}
 
@@ -426,12 +501,44 @@ export class TerminalHostClient extends EventEmitter {
 	 * Handle socket disconnect
 	 */
 	private handleDisconnect(): void {
-		this.socket = null;
-		this.authenticated = false;
+		if (this.disconnectArmed) return;
+		this.disconnectArmed = true;
+		this.resetConnectionState({ emitDisconnected: true });
+	}
+
+	/**
+	 * Reset all connection state and optionally emit `disconnected`.
+	 */
+	private resetConnectionState({
+		emitDisconnected,
+	}: {
+		emitDisconnected: boolean;
+	}): void {
+		// Destroy sockets (best-effort; close handlers may also fire)
+		try {
+			this.controlSocket?.destroy();
+		} catch {
+			// Ignore
+		}
+		try {
+			this.streamSocket?.destroy();
+		} catch {
+			// Ignore
+		}
+
+		this.controlSocket = null;
+		this.streamSocket = null;
+
+		this.controlAuthenticated = false;
+		this.streamAuthenticated = false;
 		this.connectionState = ConnectionState.DISCONNECTED;
+
 		this.notifyQueue = [];
 		this.notifyQueueBytes = 0;
 		this.notifyDrainArmed = false;
+
+		this.controlParser = new NdjsonParser();
+		this.streamParser = new NdjsonParser();
 
 		// Reject all pending requests
 		for (const [id, pending] of this.pendingRequests.entries()) {
@@ -440,22 +547,35 @@ export class TerminalHostClient extends EventEmitter {
 			this.pendingRequests.delete(id);
 		}
 
-		this.emit("disconnected");
+		if (emitDisconnected) {
+			this.emit("disconnected");
+		}
 	}
 
-	/**
-	 * Authenticate with the daemon
-	 */
-	private async authenticate(): Promise<void> {
+	private readAuthToken(): string {
 		if (!existsSync(TOKEN_PATH)) {
 			throw new Error("Auth token not found - daemon may not be running");
 		}
 
-		const token = readFileSync(TOKEN_PATH, "utf-8").trim();
+		return readFileSync(TOKEN_PATH, "utf-8").trim();
+	}
 
+	private isProtocolMismatchError(error: unknown): boolean {
+		return (
+			error instanceof Error && error.message.startsWith("PROTOCOL_MISMATCH:")
+		);
+	}
+
+	private async authenticateControl({
+		token,
+	}: {
+		token: string;
+	}): Promise<void> {
 		const response = await this.sendRequest<HelloResponse>("hello", {
 			token,
 			protocolVersion: PROTOCOL_VERSION,
+			clientId: this.clientId,
+			role: "control",
 		});
 
 		if (response.protocolVersion !== PROTOCOL_VERSION) {
@@ -464,8 +584,193 @@ export class TerminalHostClient extends EventEmitter {
 			);
 		}
 
-		this.authenticated = true;
-		this.emit("connected");
+		this.controlAuthenticated = true;
+	}
+
+	private async authenticateStream({
+		token,
+	}: {
+		token: string;
+	}): Promise<void> {
+		const response = await this.sendRequestOnStream<HelloResponse>({
+			type: "hello",
+			payload: {
+				token,
+				protocolVersion: PROTOCOL_VERSION,
+				clientId: this.clientId,
+				role: "stream",
+			},
+		});
+
+		if (response.protocolVersion !== PROTOCOL_VERSION) {
+			throw new Error(
+				`Protocol version mismatch: client=${PROTOCOL_VERSION}, daemon=${response.protocolVersion}`,
+			);
+		}
+
+		this.streamAuthenticated = true;
+	}
+
+	private async sendRequestOnStream<T>({
+		type,
+		payload,
+	}: {
+		type: string;
+		payload: unknown;
+	}): Promise<T> {
+		return new Promise<T>((resolve, reject) => {
+			if (!this.streamSocket) {
+				reject(new Error("Stream socket not connected"));
+				return;
+			}
+
+			const id = `stream_req_${++this.requestCounter}`;
+			let buffer = "";
+
+			const timeoutId = setTimeout(() => {
+				this.streamSocket?.off("data", onData);
+				reject(new Error(`Request timeout: ${type}`));
+			}, REQUEST_TIMEOUT_MS);
+
+			const onData = (data: string) => {
+				buffer += data;
+				const newlineIndex = buffer.indexOf("\n");
+				if (newlineIndex === -1) return;
+
+				const line = buffer.slice(0, newlineIndex);
+				this.streamSocket?.off("data", onData);
+				clearTimeout(timeoutId);
+
+				try {
+					const message = JSON.parse(line) as IpcResponse;
+					if (!("id" in message) || message.id !== id) {
+						reject(new Error("Unexpected stream response"));
+						return;
+					}
+					if (message.ok) {
+						resolve(message.payload as T);
+					} else {
+						reject(
+							new Error(`${message.error.code}: ${message.error.message}`),
+						);
+					}
+				} catch {
+					reject(new Error("Failed to parse stream response"));
+				}
+			};
+
+			this.streamSocket.on("data", onData);
+
+			const message = `${JSON.stringify({ id, type, payload })}\n`;
+			this.streamSocket.write(message);
+		});
+	}
+
+	private async shutdownLegacyDaemon({
+		killSessions = true,
+	}: {
+		killSessions?: boolean;
+	} = {}): Promise<void> {
+		if (!existsSync(SOCKET_PATH)) return;
+
+		const token = this.readAuthToken();
+
+		await new Promise<void>((resolve, reject) => {
+			const socket = connect(SOCKET_PATH);
+			let settled = false;
+
+			const timeoutId = setTimeout(() => {
+				if (settled) return;
+				settled = true;
+				socket.destroy();
+				reject(new Error("Legacy daemon connect timeout"));
+			}, CONNECT_TIMEOUT_MS);
+
+			socket.on("connect", () => {
+				if (settled) return;
+				clearTimeout(timeoutId);
+				socket.setEncoding("utf-8");
+
+				const sendAndWait = (request: {
+					id: string;
+					type: string;
+					payload: unknown;
+				}): Promise<IpcResponse> =>
+					new Promise((res, rej) => {
+						let buffer = "";
+						const onData = (data: string) => {
+							buffer += data;
+							const newlineIndex = buffer.indexOf("\n");
+							if (newlineIndex === -1) return;
+							socket.off("data", onData);
+							try {
+								res(JSON.parse(buffer.slice(0, newlineIndex)) as IpcResponse);
+							} catch {
+								rej(new Error("Failed to parse legacy response"));
+							}
+						};
+						socket.on("data", onData);
+						socket.write(`${JSON.stringify(request)}\n`);
+					});
+
+				(async () => {
+					try {
+						const helloId = `legacy_hello_${Date.now()}`;
+						const hello = await sendAndWait({
+							id: helloId,
+							type: "hello",
+							payload: {
+								token,
+								protocolVersion: 1,
+								clientId: this.clientId,
+								role: "control",
+							},
+						});
+						if (!hello.ok) {
+							throw new Error(
+								`Legacy hello failed: ${hello.error.code}: ${hello.error.message}`,
+							);
+						}
+
+						const shutdownId = `legacy_shutdown_${Date.now()}`;
+						await sendAndWait({
+							id: shutdownId,
+							type: "shutdown",
+							payload: { killSessions },
+						});
+
+						settled = true;
+						socket.destroy();
+						resolve();
+					} catch (error) {
+						settled = true;
+						socket.destroy();
+						reject(error instanceof Error ? error : new Error(String(error)));
+					}
+				})().catch(() => {
+					// Errors handled above
+				});
+			});
+
+			socket.on("error", (error) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timeoutId);
+				reject(error);
+			});
+		});
+	}
+
+	private async waitForDaemonShutdown(): Promise<void> {
+		const startTime = Date.now();
+		const timeoutMs = 2000;
+
+		while (Date.now() - startTime < timeoutMs) {
+			if (!existsSync(SOCKET_PATH)) return;
+			const live = await this.isSocketLive();
+			if (!live) return;
+			await this.sleep(100);
+		}
 	}
 
 	// ===========================================================================
@@ -711,7 +1016,7 @@ export class TerminalHostClient extends EventEmitter {
 	 */
 	private sendRequest<T>(type: string, payload: unknown): Promise<T> {
 		return new Promise<T>((resolve, reject) => {
-			if (!this.socket) {
+			if (!this.controlSocket) {
 				reject(new Error("Not connected"));
 				return;
 			}
@@ -731,7 +1036,7 @@ export class TerminalHostClient extends EventEmitter {
 			});
 
 			const message = `${JSON.stringify({ id, type, payload })}\n`;
-			this.socket.write(message);
+			this.controlSocket.write(message);
 		});
 	}
 
@@ -745,7 +1050,7 @@ export class TerminalHostClient extends EventEmitter {
 	 * Returns false if queue is full (caller should handle).
 	 */
 	private sendNotification(type: string, payload: unknown): boolean {
-		if (!this.socket) return false;
+		if (!this.controlSocket) return false;
 
 		const id = `notify_${++this.requestCounter}`;
 		const message = `${JSON.stringify({ id, type, payload })}\n`;
@@ -763,7 +1068,7 @@ export class TerminalHostClient extends EventEmitter {
 			return true;
 		}
 
-		const canWrite = this.socket.write(message);
+		const canWrite = this.controlSocket.write(message);
 		if (!canWrite) {
 			// Message is queued internally by the socket; arm drain to flush any
 			// subsequent notifications we enqueue.
@@ -773,7 +1078,7 @@ export class TerminalHostClient extends EventEmitter {
 	}
 
 	private flushNotifyQueue(): void {
-		if (!this.socket) return;
+		if (!this.controlSocket) return;
 		if (!this.notifyDrainArmed && this.notifyQueue.length === 0) return;
 
 		this.notifyDrainArmed = false;
@@ -783,7 +1088,7 @@ export class TerminalHostClient extends EventEmitter {
 			if (!message) break;
 			this.notifyQueueBytes -= Buffer.byteLength(message, "utf8");
 
-			const canWrite = this.socket.write(message);
+			const canWrite = this.controlSocket.write(message);
 			if (!canWrite) {
 				this.notifyDrainArmed = true;
 				return;
@@ -923,29 +1228,39 @@ export class TerminalHostClient extends EventEmitter {
 	async shutdownIfRunning(
 		request: ShutdownRequest = {},
 	): Promise<{ wasRunning: boolean }> {
-		const connected = await this.tryConnectAndAuthenticate();
-		if (!connected) {
-			return { wasRunning: false };
-		}
+		// Avoid spawning a daemon if none exists.
+		const connected = await this.tryConnectControl();
+		if (!connected) return { wasRunning: false };
 
 		try {
+			const token = this.readAuthToken();
+			try {
+				await this.authenticateControl({ token });
+			} catch (error) {
+				if (this.isProtocolMismatchError(error)) {
+					this.resetConnectionState({ emitDisconnected: false });
+					await this.shutdownLegacyDaemon({
+						killSessions: request.killSessions ?? false,
+					});
+					return { wasRunning: true };
+				}
+				throw error;
+			}
+
 			await this.sendRequest<EmptyResponse>("shutdown", request);
+			return { wasRunning: true };
 		} finally {
 			this.disconnect();
 		}
-		return { wasRunning: true };
 	}
 
 	/**
 	 * Disconnect from daemon (but don't stop it)
 	 */
 	disconnect(): void {
-		if (this.socket) {
-			this.socket.destroy();
-			this.socket = null;
-		}
-		this.authenticated = false;
-		this.connectionState = ConnectionState.DISCONNECTED;
+		// Explicit disconnect should not emit a disconnected event (caller controls UX)
+		this.disconnectArmed = true;
+		this.resetConnectionState({ emitDisconnected: false });
 	}
 
 	/**

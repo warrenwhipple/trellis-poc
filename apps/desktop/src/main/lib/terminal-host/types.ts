@@ -7,7 +7,7 @@
  */
 
 // Protocol version - increment for breaking changes
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 // =============================================================================
 // Mode Tracking
@@ -139,6 +139,10 @@ export interface SessionMeta {
 export interface HelloRequest {
 	token: string;
 	protocolVersion: number;
+	/** Stable ID shared between a client’s control + stream sockets */
+	clientId: string;
+	/** Socket role: control carries RPC; stream carries events */
+	role: "control" | "stream";
 }
 
 export interface HelloResponse {

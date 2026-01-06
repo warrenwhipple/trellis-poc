@@ -8,7 +8,7 @@
  * 4. Respond to hello requests
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -233,12 +233,12 @@ describe("Terminal Host Daemon", () => {
 		});
 	}
 
-	beforeEach(async () => {
+	beforeAll(async () => {
 		cleanup();
 		await startDaemon();
 	});
 
-	afterEach(async () => {
+	afterAll(async () => {
 		await stopDaemon();
 		cleanup();
 	});
@@ -259,6 +259,8 @@ describe("Terminal Host Daemon", () => {
 					payload: {
 						token,
 						protocolVersion: PROTOCOL_VERSION,
+						clientId: "test-client",
+						role: "control",
 					},
 				};
 
@@ -288,6 +290,8 @@ describe("Terminal Host Daemon", () => {
 					payload: {
 						token: "invalid-token",
 						protocolVersion: PROTOCOL_VERSION,
+						clientId: "test-client",
+						role: "control",
 					},
 				};
 
@@ -316,6 +320,8 @@ describe("Terminal Host Daemon", () => {
 					payload: {
 						token,
 						protocolVersion: 999, // Invalid version
+						clientId: "test-client",
+						role: "control",
 					},
 				};
 
@@ -371,6 +377,8 @@ describe("Terminal Host Daemon", () => {
 					payload: {
 						token,
 						protocolVersion: PROTOCOL_VERSION,
+						clientId: "test-client",
+						role: "control",
 					},
 				};
 
@@ -413,6 +421,8 @@ describe("Terminal Host Daemon", () => {
 					payload: {
 						token,
 						protocolVersion: PROTOCOL_VERSION,
+						clientId: "test-client",
+						role: "control",
 					},
 				};
 

@@ -10,7 +10,7 @@
  * 6. Kill session
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -263,7 +263,15 @@ describe("Terminal Host Session Lifecycle", () => {
 	/**
 	 * Authenticate with the daemon
 	 */
-	async function authenticate(socket: Socket): Promise<void> {
+	async function authenticate({
+		socket,
+		clientId,
+		role,
+	}: {
+		socket: Socket;
+		clientId: string;
+		role: "control" | "stream";
+	}): Promise<void> {
 		const token = readFileSync(TOKEN_PATH, "utf-8").trim();
 
 		const request: IpcRequest = {
@@ -272,6 +280,8 @@ describe("Terminal Host Session Lifecycle", () => {
 			payload: {
 				token,
 				protocolVersion: PROTOCOL_VERSION,
+				clientId,
+				role,
 			},
 		};
 
@@ -279,6 +289,19 @@ describe("Terminal Host Session Lifecycle", () => {
 		if (!response.ok) {
 			throw new Error(`Authentication failed: ${JSON.stringify(response)}`);
 		}
+	}
+
+	async function connectClient(): Promise<{
+		control: Socket;
+		stream: Socket;
+		clientId: string;
+	}> {
+		const control = await connectToDaemon();
+		const stream = await connectToDaemon();
+		const clientId = `test-client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+		await authenticate({ socket: control, clientId, role: "control" });
+		await authenticate({ socket: stream, clientId, role: "stream" });
+		return { control, stream, clientId };
 	}
 
 	/**
@@ -323,23 +346,21 @@ describe("Terminal Host Session Lifecycle", () => {
 		});
 	}
 
-	beforeEach(async () => {
+	beforeAll(async () => {
 		cleanup();
 		await startDaemon();
 	});
 
-	afterEach(async () => {
+	afterAll(async () => {
 		await stopDaemon();
 		cleanup();
 	});
 
 	describe("session creation", () => {
 		it("should create a new session and return snapshot", async () => {
-			const socket = await connectToDaemon();
+			const { control, stream } = await connectClient();
 
 			try {
-				await authenticate(socket);
-
 				const createRequest: IpcRequest = {
 					id: "test-create-1",
 					type: "createOrAttach",
@@ -354,7 +375,7 @@ describe("Terminal Host Session Lifecycle", () => {
 					} satisfies CreateOrAttachRequest,
 				};
 
-				const response = await sendRequest(socket, createRequest);
+				const response = await sendRequest(control, createRequest);
 
 				expect(response.id).toBe("test-create-1");
 				expect(response.ok).toBe(true);
@@ -367,16 +388,15 @@ describe("Terminal Host Session Lifecycle", () => {
 					expect(payload.snapshot.rows).toBe(24);
 				}
 			} finally {
-				socket.destroy();
+				control.destroy();
+				stream.destroy();
 			}
 		});
 
 		it("should attach to existing session", async () => {
-			const socket = await connectToDaemon();
+			const { control, stream } = await connectClient();
 
 			try {
-				await authenticate(socket);
-
 				// Create first session
 				const createRequest1: IpcRequest = {
 					id: "test-create-2a",
@@ -392,7 +412,7 @@ describe("Terminal Host Session Lifecycle", () => {
 					} satisfies CreateOrAttachRequest,
 				};
 
-				const response1 = await sendRequest(socket, createRequest1);
+				const response1 = await sendRequest(control, createRequest1);
 				expect(response1.ok).toBe(true);
 				if (response1.ok) {
 					expect((response1.payload as CreateOrAttachResponse).isNew).toBe(
@@ -402,7 +422,7 @@ describe("Terminal Host Session Lifecycle", () => {
 
 				// Wait for the session to be fully ready before attaching
 				// PTY spawn can be async and session needs to be alive for attach
-				const isReady = await waitForSessionReady(socket, "test-session-2");
+				const isReady = await waitForSessionReady(control, "test-session-2");
 				expect(isReady).toBe(true);
 
 				// Attach to same session
@@ -420,7 +440,7 @@ describe("Terminal Host Session Lifecycle", () => {
 					} satisfies CreateOrAttachRequest,
 				};
 
-				const response2 = await sendRequest(socket, createRequest2);
+				const response2 = await sendRequest(control, createRequest2);
 				if (!response2.ok) {
 					// Log error details for debugging
 					console.error("Attach failed:", JSON.stringify(response2, null, 2));
@@ -432,7 +452,66 @@ describe("Terminal Host Session Lifecycle", () => {
 					expect(payload.wasRecovered).toBe(true);
 				}
 			} finally {
-				socket.destroy();
+				control.destroy();
+				stream.destroy();
+			}
+		});
+	});
+
+	describe("backpressure isolation", () => {
+		it("should not delay createOrAttach when stream socket is backpressured", async () => {
+			const { control, stream } = await connectClient();
+
+			try {
+				// Stop consuming the stream to simulate a slow/unresponsive client.
+				stream.pause();
+
+				// Force the daemon to write a *large* event to the stream socket without relying on PTY output.
+				// We do this by sending a notify write to a non-existent session with an intentionally huge ID,
+				// which triggers an error event written to the stream socket.
+				const hugeSessionId = `bp-missing-${"x".repeat(50_000)}`;
+				control.write(
+					`${JSON.stringify({
+						id: "notify_bp_1",
+						type: "write",
+						payload: { sessionId: hugeSessionId, data: "x" },
+					})}\n`,
+				);
+
+				// Give the daemon a moment to enqueue the error event and hit backpressure.
+				await new Promise((resolve) => setTimeout(resolve, 50));
+
+				// Create/attach should still complete quickly because it returns over the control socket.
+				const startTime = Date.now();
+				const createRequest2: IpcRequest = {
+					id: "bp-create-2",
+					type: "createOrAttach",
+					payload: {
+						sessionId: "bp-session-2",
+						workspaceId: "workspace-1",
+						paneId: "bp-pane-2",
+						tabId: "tab-1",
+						cols: 80,
+						rows: 24,
+						cwd: process.env.HOME,
+					} satisfies CreateOrAttachRequest,
+				};
+
+				const createResponse2 = await sendRequest(control, createRequest2);
+				const elapsedMs = Date.now() - startTime;
+
+				expect(createResponse2.ok).toBe(true);
+				expect(elapsedMs).toBeLessThan(3000);
+
+				// Cleanup (best-effort)
+				await sendRequest(control, {
+					id: "bp-kill-2",
+					type: "kill",
+					payload: { sessionId: "bp-session-2" },
+				});
+			} finally {
+				control.destroy();
+				stream.destroy();
 			}
 		});
 	});
@@ -441,11 +520,9 @@ describe("Terminal Host Session Lifecycle", () => {
 		// Note: PTY operations may fail in test environment due to bun/node-pty compatibility
 		// The daemon infrastructure is tested separately in daemon.test.ts
 		it.skip("should write data to terminal and receive output", async () => {
-			const socket = await connectToDaemon();
+			const { control, stream } = await connectClient();
 
 			try {
-				await authenticate(socket);
-
 				// Create session
 				const createRequest: IpcRequest = {
 					id: "test-write-1",
@@ -461,10 +538,10 @@ describe("Terminal Host Session Lifecycle", () => {
 					} satisfies CreateOrAttachRequest,
 				};
 
-				await sendRequest(socket, createRequest);
+				await sendRequest(control, createRequest);
 
 				// Wait for shell prompt (data event)
-				const dataPromise = waitForEvent(socket, "data", 10000);
+				const dataPromise = waitForEvent(stream, "data", 10000);
 
 				// Write a simple echo command
 				const writeRequest: IpcRequest = {
@@ -476,7 +553,7 @@ describe("Terminal Host Session Lifecycle", () => {
 					},
 				};
 
-				const writeResponse = await sendRequest(socket, writeRequest);
+				const writeResponse = await sendRequest(control, writeRequest);
 				if (!writeResponse.ok) {
 					console.error("Write failed:", writeResponse);
 				}
@@ -491,17 +568,16 @@ describe("Terminal Host Session Lifecycle", () => {
 				expect(payload.type).toBe("data");
 				expect(typeof payload.data).toBe("string");
 			} finally {
-				socket.destroy();
+				control.destroy();
+				stream.destroy();
 			}
 		});
 
 		// Note: PTY operations may fail in test environment due to bun/node-pty compatibility
 		it.skip("should resize terminal", async () => {
-			const socket = await connectToDaemon();
+			const { control, stream } = await connectClient();
 
 			try {
-				await authenticate(socket);
-
 				// Create session
 				const createRequest: IpcRequest = {
 					id: "test-resize-1",
@@ -517,7 +593,7 @@ describe("Terminal Host Session Lifecycle", () => {
 					} satisfies CreateOrAttachRequest,
 				};
 
-				await sendRequest(socket, createRequest);
+				await sendRequest(control, createRequest);
 
 				// Resize
 				const resizeRequest: IpcRequest = {
@@ -530,10 +606,11 @@ describe("Terminal Host Session Lifecycle", () => {
 					},
 				};
 
-				const resizeResponse = await sendRequest(socket, resizeRequest);
+				const resizeResponse = await sendRequest(control, resizeRequest);
 				expect(resizeResponse.ok).toBe(true);
 			} finally {
-				socket.destroy();
+				control.destroy();
+				stream.destroy();
 			}
 		});
 	});
@@ -541,11 +618,9 @@ describe("Terminal Host Session Lifecycle", () => {
 	describe("session listing", () => {
 		// Note: PTY operations may fail in test environment due to bun/node-pty compatibility
 		it.skip("should list all sessions", async () => {
-			const socket = await connectToDaemon();
+			const { control, stream } = await connectClient();
 
 			try {
-				await authenticate(socket);
-
 				// Create two sessions
 				for (const id of ["session-list-1", "session-list-2"]) {
 					const createRequest: IpcRequest = {
@@ -561,7 +636,7 @@ describe("Terminal Host Session Lifecycle", () => {
 							cwd: process.env.HOME,
 						} satisfies CreateOrAttachRequest,
 					};
-					await sendRequest(socket, createRequest);
+					await sendRequest(control, createRequest);
 				}
 
 				// List sessions
@@ -571,7 +646,7 @@ describe("Terminal Host Session Lifecycle", () => {
 					payload: undefined,
 				};
 
-				const listResponse = await sendRequest(socket, listRequest);
+				const listResponse = await sendRequest(control, listRequest);
 				expect(listResponse.ok).toBe(true);
 
 				if (listResponse.ok) {
@@ -583,18 +658,17 @@ describe("Terminal Host Session Lifecycle", () => {
 					expect(sessionIds).toContain("session-list-2");
 				}
 			} finally {
-				socket.destroy();
+				control.destroy();
+				stream.destroy();
 			}
 		});
 	});
 
 	describe("session termination", () => {
 		it("should kill a specific session", async () => {
-			const socket = await connectToDaemon();
+			const { control, stream } = await connectClient();
 
 			try {
-				await authenticate(socket);
-
 				// Create session
 				const createRequest: IpcRequest = {
 					id: "test-kill-1",
@@ -610,7 +684,7 @@ describe("Terminal Host Session Lifecycle", () => {
 					} satisfies CreateOrAttachRequest,
 				};
 
-				await sendRequest(socket, createRequest);
+				await sendRequest(control, createRequest);
 
 				// Kill session
 				const killRequest: IpcRequest = {
@@ -621,24 +695,23 @@ describe("Terminal Host Session Lifecycle", () => {
 					},
 				};
 
-				const killResponse = await sendRequest(socket, killRequest);
+				const killResponse = await sendRequest(control, killRequest);
 				expect(killResponse.ok).toBe(true);
 
 				// Wait for exit event
-				const exitEvent = await waitForEvent(socket, "exit", 5000);
+				const exitEvent = await waitForEvent(stream, "exit", 5000);
 				expect(exitEvent.sessionId).toBe("test-session-kill");
 			} finally {
-				socket.destroy();
+				control.destroy();
+				stream.destroy();
 			}
 		});
 
 		// Note: PTY operations may fail in test environment due to bun/node-pty compatibility
 		it.skip("should kill all sessions", async () => {
-			const socket = await connectToDaemon();
+			const { control, stream } = await connectClient();
 
 			try {
-				await authenticate(socket);
-
 				// Create sessions
 				for (const id of ["kill-all-1", "kill-all-2"]) {
 					const createRequest: IpcRequest = {
@@ -654,7 +727,7 @@ describe("Terminal Host Session Lifecycle", () => {
 							cwd: process.env.HOME,
 						} satisfies CreateOrAttachRequest,
 					};
-					await sendRequest(socket, createRequest);
+					await sendRequest(control, createRequest);
 				}
 
 				// Kill all
@@ -664,7 +737,7 @@ describe("Terminal Host Session Lifecycle", () => {
 					payload: {},
 				};
 
-				const killAllResponse = await sendRequest(socket, killAllRequest);
+				const killAllResponse = await sendRequest(control, killAllRequest);
 				expect(killAllResponse.ok).toBe(true);
 
 				// Wait a bit for exits to propagate
@@ -677,7 +750,7 @@ describe("Terminal Host Session Lifecycle", () => {
 					payload: undefined,
 				};
 
-				const listResponse = await sendRequest(socket, listRequest);
+				const listResponse = await sendRequest(control, listRequest);
 				expect(listResponse.ok).toBe(true);
 
 				if (listResponse.ok) {
@@ -686,7 +759,8 @@ describe("Terminal Host Session Lifecycle", () => {
 					expect(aliveSessions.length).toBe(0);
 				}
 			} finally {
-				socket.destroy();
+				control.destroy();
+				stream.destroy();
 			}
 		});
 	});

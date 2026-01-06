@@ -180,6 +180,27 @@ type RequestHandler = (
 
 interface ClientState {
 	authenticated: boolean;
+	clientId?: string;
+	role?: "control" | "stream";
+}
+
+interface ClientSockets {
+	control?: Socket;
+	stream?: Socket;
+}
+
+const clientsById = new Map<string, ClientSockets>();
+
+function isValidRole(role: unknown): role is "control" | "stream" {
+	return role === "control" || role === "stream";
+}
+
+function getStreamSocketForClient(
+	clientState: ClientState,
+): Socket | undefined {
+	const clientId = clientState.clientId;
+	if (!clientId) return undefined;
+	return clientsById.get(clientId)?.stream;
 }
 
 const handlers: Record<string, RequestHandler> = {
@@ -203,7 +224,38 @@ const handlers: Record<string, RequestHandler> = {
 			return;
 		}
 
+		// Validate v2 fields
+		if (typeof request.clientId !== "string" || request.clientId.length === 0) {
+			sendError(socket, id, "INVALID_HELLO", "Missing clientId");
+			return;
+		}
+		if (!isValidRole(request.role)) {
+			sendError(socket, id, "INVALID_HELLO", "Invalid role");
+			return;
+		}
+
 		clientState.authenticated = true;
+		clientState.clientId = request.clientId;
+		clientState.role = request.role;
+
+		// Register the socket under the clientId/role. Replace any existing socket for
+		// the same role to avoid ghost connections that can re-introduce backpressure.
+		const existing = clientsById.get(request.clientId) ?? {};
+		const previousSocket =
+			request.role === "control" ? existing.control : existing.stream;
+		if (previousSocket && previousSocket !== socket) {
+			try {
+				terminalHost.detachFromAllSessions(previousSocket);
+				previousSocket.destroy();
+			} catch {
+				// Best effort cleanup
+			}
+		}
+		const updated: ClientSockets =
+			request.role === "control"
+				? { ...existing, control: socket }
+				: { ...existing, stream: socket };
+		clientsById.set(request.clientId, updated);
 
 		const response: HelloResponse = {
 			protocolVersion: PROTOCOL_VERSION,
@@ -212,7 +264,10 @@ const handlers: Record<string, RequestHandler> = {
 		};
 
 		sendSuccess(socket, id, response);
-		log("info", "Client authenticated successfully");
+		log("info", "Client authenticated successfully", {
+			clientId: request.clientId,
+			role: request.role,
+		});
 	},
 
 	createOrAttach: async (socket, id, payload, clientState) => {
@@ -220,12 +275,27 @@ const handlers: Record<string, RequestHandler> = {
 			sendError(socket, id, "NOT_AUTHENTICATED", "Must authenticate first");
 			return;
 		}
+		if (clientState.role !== "control") {
+			sendError(socket, id, "INVALID_ROLE", "createOrAttach requires control");
+			return;
+		}
 
 		const request = payload as CreateOrAttachRequest;
 		log("info", `Creating/attaching session: ${request.sessionId}`);
 
 		try {
-			const response = await terminalHost.createOrAttach(socket, request);
+			const streamSocket = getStreamSocketForClient(clientState);
+			if (!streamSocket) {
+				sendError(
+					socket,
+					id,
+					"STREAM_NOT_CONNECTED",
+					"Stream socket not connected",
+				);
+				return;
+			}
+
+			const response = await terminalHost.createOrAttach(streamSocket, request);
 			sendSuccess(socket, id, response);
 
 			log(
@@ -242,6 +312,10 @@ const handlers: Record<string, RequestHandler> = {
 	write: (socket, id, payload, clientState) => {
 		if (!clientState.authenticated) {
 			sendError(socket, id, "NOT_AUTHENTICATED", "Must authenticate first");
+			return;
+		}
+		if (clientState.role !== "control") {
+			sendError(socket, id, "INVALID_ROLE", "write requires control");
 			return;
 		}
 
@@ -262,6 +336,14 @@ const handlers: Record<string, RequestHandler> = {
 			if (isNotify) {
 				// Emit a session-scoped error event so the main process can surface it.
 				// (No response is sent for notify writes.)
+				const streamSocket = getStreamSocketForClient(clientState);
+				if (!streamSocket) {
+					log("warn", "Notify write failed but no stream socket registered", {
+						sessionId: request.sessionId,
+						error: message,
+					});
+					return;
+				}
 				const event: IpcEvent = {
 					type: "event",
 					event: "error",
@@ -272,7 +354,7 @@ const handlers: Record<string, RequestHandler> = {
 						code: "WRITE_FAILED",
 					} satisfies TerminalErrorEvent,
 				};
-				socket.write(`${JSON.stringify(event)}\n`);
+				streamSocket.write(`${JSON.stringify(event)}\n`);
 				log("warn", `Write failed for ${request.sessionId}`, {
 					error: message,
 				});
@@ -288,6 +370,10 @@ const handlers: Record<string, RequestHandler> = {
 			sendError(socket, id, "NOT_AUTHENTICATED", "Must authenticate first");
 			return;
 		}
+		if (clientState.role !== "control") {
+			sendError(socket, id, "INVALID_ROLE", "resize requires control");
+			return;
+		}
 
 		const request = payload as ResizeRequest;
 		const response = terminalHost.resize(request);
@@ -299,15 +385,33 @@ const handlers: Record<string, RequestHandler> = {
 			sendError(socket, id, "NOT_AUTHENTICATED", "Must authenticate first");
 			return;
 		}
+		if (clientState.role !== "control") {
+			sendError(socket, id, "INVALID_ROLE", "detach requires control");
+			return;
+		}
 
 		const request = payload as DetachRequest;
-		const response = terminalHost.detach(socket, request);
+		const streamSocket = getStreamSocketForClient(clientState);
+		if (!streamSocket) {
+			sendError(
+				socket,
+				id,
+				"STREAM_NOT_CONNECTED",
+				"Stream socket not connected",
+			);
+			return;
+		}
+		const response = terminalHost.detach(streamSocket, request);
 		sendSuccess(socket, id, response);
 	},
 
 	kill: (socket, id, payload, clientState) => {
 		if (!clientState.authenticated) {
 			sendError(socket, id, "NOT_AUTHENTICATED", "Must authenticate first");
+			return;
+		}
+		if (clientState.role !== "control") {
+			sendError(socket, id, "INVALID_ROLE", "kill requires control");
 			return;
 		}
 
@@ -322,6 +426,10 @@ const handlers: Record<string, RequestHandler> = {
 			sendError(socket, id, "NOT_AUTHENTICATED", "Must authenticate first");
 			return;
 		}
+		if (clientState.role !== "control") {
+			sendError(socket, id, "INVALID_ROLE", "killAll requires control");
+			return;
+		}
 
 		const request = payload as KillAllRequest;
 		const response = terminalHost.killAll(request);
@@ -334,6 +442,10 @@ const handlers: Record<string, RequestHandler> = {
 			sendError(socket, id, "NOT_AUTHENTICATED", "Must authenticate first");
 			return;
 		}
+		if (clientState.role !== "control") {
+			sendError(socket, id, "INVALID_ROLE", "listSessions requires control");
+			return;
+		}
 
 		const response = terminalHost.listSessions();
 		sendSuccess(socket, id, response);
@@ -342,6 +454,10 @@ const handlers: Record<string, RequestHandler> = {
 	clearScrollback: (socket, id, payload, clientState) => {
 		if (!clientState.authenticated) {
 			sendError(socket, id, "NOT_AUTHENTICATED", "Must authenticate first");
+			return;
+		}
+		if (clientState.role !== "control") {
+			sendError(socket, id, "INVALID_ROLE", "clearScrollback requires control");
 			return;
 		}
 
@@ -353,6 +469,10 @@ const handlers: Record<string, RequestHandler> = {
 	shutdown: (socket, id, payload, clientState) => {
 		if (!clientState.authenticated) {
 			sendError(socket, id, "NOT_AUTHENTICATED", "Must authenticate first");
+			return;
+		}
+		if (clientState.role !== "control") {
+			sendError(socket, id, "INVALID_ROLE", "shutdown requires control");
 			return;
 		}
 
@@ -433,6 +553,31 @@ function handleConnection(socket: Socket) {
 		// Detach this socket from all sessions it was attached to
 		// This is centralized here to avoid per-session socket listeners
 		terminalHost.detachFromAllSessions(socket);
+
+		// Remove from client map if this was a registered control/stream socket.
+		const { clientId, role } = clientState;
+		if (clientId && role) {
+			const entry = clientsById.get(clientId);
+			if (entry) {
+				const matches =
+					role === "control"
+						? entry.control === socket
+						: entry.stream === socket;
+				if (matches) {
+					const next: ClientSockets = { ...entry };
+					if (role === "control") {
+						delete next.control;
+					} else {
+						delete next.stream;
+					}
+					if (!next.control && !next.stream) {
+						clientsById.delete(clientId);
+					} else {
+						clientsById.set(clientId, next);
+					}
+				}
+			}
+		}
 	};
 
 	socket.on("close", handleDisconnect);
