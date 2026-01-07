@@ -1,9 +1,9 @@
-# Terminal Persistence DX Hardening (No Startup Freeze, Background Activity, Bounded Resources)
+# Terminal Persistence DX Hardening (No Startup Freeze, Smooth Switching, Bounded Resources)
 
 
 ## Purpose
 
-When “Terminal persistence” is enabled, Superset should never freeze or spin at startup, even if the user has accumulated dozens of terminal panes over time. The user should be able to switch between recent terminal tabs with near‑instant feedback, and they should still get clear signals (badges and optional notifications) when background terminals produce output or exit, without keeping every terminal renderer and stream active.
+When “Terminal persistence” is enabled, Superset should never freeze or spin at startup, even if the user has accumulated dozens of terminal panes over time. The user should be able to switch between recent terminal tabs with near‑instant feedback, without keeping every terminal renderer and stream active.
 
 This work matters because today a user can get their desktop app into a broken state where a large restored terminal set causes 99% CPU usage and an infinite macOS spinner. The goal is to make persistence robust by default and to make failure modes recoverable from within the UI (no manual edits to `~/.superset/app-state.json`).
 
@@ -23,7 +23,21 @@ A “workspace” is a worktree-backed project environment shown in the left sid
 
 “Daemon mode” means terminal persistence is enabled; terminal sessions live in the detached daemon process and survive app restarts. “Attach” means connecting the app’s event stream to an existing daemon session. “Spawn” means starting a new PTY/shell process for a session.
 
-An “activity signal” is a low‑volume event meaning “this background terminal has new output or exited” without delivering full terminal output.
+“tRPC” is the typed RPC layer used for renderer ↔ main-process calls in this repo. In the renderer, calls live under `apps/desktop/src/renderer/lib/trpc`. In the main process, handlers live under `apps/desktop/src/lib/trpc/routers/*`.
+
+“NDJSON” means newline-delimited JSON (each message is a JSON object followed by `\n`). The main process and the daemon use NDJSON over Unix domain sockets for control messages and terminal event streaming.
+
+“PTY” (pseudo-terminal) is the OS-backed terminal device used to run shells. In daemon mode, the daemon spawns PTYs (via node-pty) and streams their output.
+
+“TUI” (text user interface) means full-screen terminal apps like `vim`, `htop`, or Codex/Claude Code UIs. These often use the “alternate screen” buffer (“alt-screen”), which is why unmount/remount must restore terminal state carefully.
+
+“Pane status” is a persisted per-pane UI indicator used to surface agent lifecycle state across tabs/workspaces. It lives on `pane.status` and currently supports `idle`, `working`, `permission`, and `review`. The tab strip (`GroupStrip`) and workspace list aggregate pane statuses using shared priority logic in `apps/desktop/src/shared/tabs-types.ts` and render dots via `apps/desktop/src/renderer/screens/main/components/StatusIndicator/StatusIndicator.tsx`.
+
+Separately, Superset Desktop can show macOS desktop notifications for agent lifecycle events (for example “Agent Complete” or “Input Needed”). Those notifications are triggered in the main process (`apps/desktop/src/main/windows/main.ts`) from the same agent lifecycle event stream, and they are not driven by general terminal output.
+
+An “LRU warm set” is a small, bounded cache of most-recently-used terminal tabs that remain mounted to keep common tab switches fast. It is explicitly not persisted, so it cannot cause startup fan-out after restart.
+
+A “session lifecycle signal” (in scope for this PR) is a low‑volume event such as “this terminal session exited” that exists only to keep existing UI state correct (for example clearing stuck agent lifecycle statuses) when terminal panes are not mounted.
 
 “Cold restore” means: the daemon does not have a session (for example after reboot), but we have on-disk scrollback from a prior run that did not shut down cleanly. The UI should show the saved scrollback and let the user explicitly start a new shell.
 
@@ -36,6 +50,7 @@ Renderer (browser environment, no Node imports):
     apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/Terminal/Terminal.tsx
     apps/desktop/src/renderer/stores/tabs/store.ts
     apps/desktop/src/renderer/stores/tabs/useAgentHookListener.ts
+    apps/desktop/src/renderer/screens/main/components/StatusIndicator/StatusIndicator.tsx
 
 Main process (Node/Electron environment):
 
@@ -54,11 +69,12 @@ Persisted UI state:
 
     apps/desktop/src/main/lib/app-state/index.ts
     apps/desktop/src/lib/trpc/routers/ui-state/index.ts
+    apps/desktop/src/shared/tabs-types.ts
 
 
 ## Problem Statement (What Breaks Today)
 
-When terminal persistence is enabled, the renderer currently keeps every tab that contains a terminal mounted (even if hidden). This is implemented in `apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/index.tsx` by rendering all “terminal tabs” and toggling visibility. Each terminal pane mounts a `Terminal` component, and each `Terminal` immediately calls `trpc.terminal.createOrAttach` and enables a stream subscription (`trpc.terminal.stream.useSubscription`).
+When terminal persistence is enabled, the renderer currently keeps every tab that contains a terminal mounted (even if hidden), across all workspaces. This is implemented in `apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/index.tsx` by rendering all “terminal tabs” and toggling visibility. Each terminal pane mounts a `Terminal` component, and each `Terminal` immediately calls `trpc.terminal.createOrAttach` and enables a stream subscription (`trpc.terminal.stream.useSubscription`).
 
 If a user has accumulated many terminal panes in persisted state (for example `tabsState.panes` contains ~90 terminal panes), startup mounts and attaches all of them. In daemon mode, each attach also does disk work for cold-restore detection (`HistoryReader.read`) and can cause new PTY spawns if the daemon is missing sessions. The combined fan‑out can saturate CPU, fill logs, and freeze the UI.
 
@@ -69,14 +85,16 @@ This work should deliver these user-visible outcomes:
 
 1. App startup remains responsive with 50–100 persisted terminal panes; the UI shows quickly and does not beachball.
 2. Switching to a recently used terminal tab feels “instant enough” (target: the user sees a correct terminal view within ~200ms in the common case).
-3. Background terminals still surface activity (badge on the tab and workspace; optional system notification on exit or when the user opts in).
+3. Terminal persistence remains “real” (processes keep running in the daemon) even if their UI is not mounted, and the UI does not regress in correctness (for example, agent lifecycle `pane.status` does not get stuck forever because a terminal exited while hidden).
 4. The daemon cannot be driven into unbounded resource usage by accident. There are clear limits, and the UI provides a way to manage sessions and recover from overload.
 5. Cold restore does not spawn a new shell until the user explicitly starts one.
 
 
 ## Non-Goals
 
-This plan does not attempt to replace xterm.js, node-pty, or rewrite the persistence architecture. It also does not attempt to perfectly summarize background output; it only needs a reliable “something happened” signal plus exit/error.
+This plan does not attempt to replace xterm.js, node-pty, or rewrite the persistence architecture. It does not introduce any new user-facing “background terminal output” indicators or notifications; it only preserves correctness via low-volume session lifecycle signals (exit/error) needed to keep existing agent lifecycle `pane.status` state accurate.
+
+This plan explicitly does not attempt to provide “notify me when an arbitrary command finishes” for normal terminal commands like `pnpm test`. Implementing that requires prompt-level hooks or explicit wrappers, and will be tracked as a separate DX follow-up PR.
 
 
 ## Assumptions
@@ -90,20 +108,17 @@ The daemon and client are shipped together, but we must handle stale daemons bec
 
 These questions must be answered (or explicitly decided) before implementation is finalized:
 
-1. Should background activity signals be enabled by default when terminal persistence is enabled, or should it be a separate setting?
-2. What is the “warm” cache size for keeping a small number of terminal tabs fully mounted/streaming (suggestion: 2–3), and should it be configurable?
-3. What is the default daemon resource policy: warn-only, or automatic cleanup (idle timeout, max sessions) enabled by default?
-4. What should the product promise be for cold restore: always show saved scrollback first and require explicit “Start Shell”, or auto-start a shell in some cases?
-5. What is the acceptable worst-case reattach latency, and do we treat alt-screen (TUI) sessions differently in UX (for example always show a short “Resuming…” overlay)?
+None (all previously open questions have been decided for this PR scope).
 
 
 ## Decision Log (To Be Filled As Questions Are Resolved)
 
-1. Decision for Open Question 1: TBD.
-2. Decision for Open Question 2: TBD.
-3. Decision for Open Question 3: TBD.
-4. Decision for Open Question 4: TBD.
-5. Decision for Open Question 5: TBD.
+1. Decision (Background indicators scope): This PR will not introduce any new background terminal activity indicators beyond the existing agent lifecycle `pane.status` updates driven by `apps/desktop/src/renderer/stores/tabs/useAgentHookListener.ts`. Any additional background terminal output indicators or “command finished” semantics will be explored in follow-up PRs based on user/team feedback.
+2. Decision (Warm set size): Use a global per-run LRU warm set of 8 terminal tabs (across all workspaces), not persisted and not configurable in the first iteration. This matches the “I jump between up to ~8 workspaces” power-user workflow while keeping the resource cost bounded. Tradeoff: higher warm size increases steady-state renderer memory and can increase CPU under very chatty background terminals; Milestone 0 includes a concrete measurement step and we will reduce the default if the measured cost is too high.
+3. Decision (Daemon resource policy): Warn-only by default + user-facing recovery tools. Do not enable automatic idle eviction / LRU eviction by default in this PR, because it can kill long-running user processes unexpectedly. If we add eviction later, it should be opt-in and clearly explained in settings.
+4. Decision (Cold restore promise): Always show saved scrollback first and require an explicit user action (“Start Shell”) to spawn a new PTY after cold restore. Never auto-spawn on attach.
+5. Decision (Reattach latency UX): Keep warm tabs effectively instant. For cold attaches, show a fast “Resuming…” UI state while attaching/snapshotting so the user never sees a blank terminal, and progressively attach panes in heavy tabs.
+6. Deferred question (follow-up PR): If we ever add background terminal output indicators, decide whether to reuse `pane.status="review"` or introduce a separate “unread output” indicator. This is intentionally out of scope for this PR.
 
 
 ## Plan of Work
@@ -125,6 +140,8 @@ Acceptance:
 
 Manual verification: with terminal persistence enabled, create ~30 terminals, restart the app, and confirm logs show the number of `createOrAttach` calls and typical durations.
 
+Manual verification (warm sizing): after the app is running, visit several terminal tabs across multiple workspaces until the warm set is full, then observe CPU and memory in Activity Monitor. This establishes whether the chosen warm set size is acceptable on typical developer machines.
+
 
 ### Milestone 1: Stop Startup Fan-Out by Changing Renderer Mount Policy
 
@@ -132,7 +149,16 @@ This milestone removes the direct cause of “restore everything on startup”. 
 
 Work:
 
-Update `apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/index.tsx` so that when terminal persistence is enabled it does not render every terminal-containing tab. Compute a bounded warm set using `tabHistoryStacks` from the tabs store. Always include the active tab. Then include up to N previously active terminal tabs for the active workspace. Render only that warm set, still using `visibility: hidden` to preserve xterm dimensions for warm tabs.
+Update `apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/index.tsx` so that when terminal persistence is enabled it does not render every terminal-containing tab across all workspaces. Instead, render a bounded “warm” set so switching between recently used terminal tabs stays smooth without mounting everything.
+
+Implement the warm set as a global per-run LRU list (not persisted), so it improves common navigation during a session but does not re-introduce startup fan-out after restart. The warm set should be capped by a small constant (recommended default: 8).
+
+Concrete behavior:
+
+    - Always render the active tab for the active workspace (current behavior).
+    - Additionally, render the most recently visited terminal tabs across all workspaces, up to a total of N mounted terminal tabs including the active tab (N = warm set size).
+    - Use `visibility: hidden` (not `display: none`) for warm-but-not-active tabs to preserve xterm sizing and avoid resize bugs.
+    - When a tab leaves the warm set, it should unmount, which triggers normal `Terminal` detach behavior (the daemon session continues running).
 
 Do not change non-terminal tab behavior: non-terminal tabs should continue to mount only when active.
 
@@ -163,24 +189,30 @@ Acceptance:
 Manual verification: create 10 new terminals quickly and confirm sessions are created progressively without UI lockups.
 
 
-### Milestone 3: Background Activity Signals and Badges for Hidden Terminals
+### Milestone 3: Session Lifecycle Signals for Hidden Terminals (Correctness Only)
 
-This milestone restores a key piece of DX that “mount everything” previously provided: knowing when something happens in a background terminal. At completion, the app shows an activity badge for background terminals without subscribing to their full output stream.
+This milestone prevents a subtle correctness regression once we stop mounting/attaching everything. Today, `Terminal.tsx` clears stuck agent lifecycle statuses on terminal exit (for example, if the user interrupts an agent and the hook doesn’t fire, exit clears `pane.status` from `working`/`permission` back to `idle`). If a terminal pane is not mounted, the renderer will not receive per-pane stream exit events, so those statuses can remain stuck indefinitely.
+
+At completion, the app receives low-volume session lifecycle events (exit and error) even for daemon sessions that are not currently attached to a renderer terminal stream, and uses those events only to keep `pane.status` correct. This milestone does not attempt to signal “command finished” for arbitrary commands, and it does not stream background output.
 
 Work:
 
-Extend the daemon IPC to support “activity-only” subscriptions that do not stream full terminal output. Implement this by introducing a separate client set inside `apps/desktop/src/main/terminal-host/session.ts` so that “data” frames are not written to activity subscribers (avoiding backpressure and CPU churn). Activity events must be throttled and coalesced (for example at most one “activity” event per session every 250–500ms while output continues).
+Extend the daemon IPC to broadcast session lifecycle events (at minimum: exit; optionally: terminalError) to a global subscriber set that is not per-session attach. The key invariant is: session exit is observable even when no UI client is attached to the session’s stream.
 
-Ensure that exit and error are delivered to activity subscribers as high-signal events.
+Route those lifecycle events to the renderer in a single subscription (one per app), not one per pane. Prefer reusing the existing notifications subscription plumbing (`notificationsEmitter` + `trpc.notifications.subscribe`) to avoid introducing a parallel event system, but ensure these events do not trigger macOS notifications (agent lifecycle notifications remain unchanged).
 
-Expose a single renderer-level subscription for activity signals. This should be one subscription for the whole app, not one per pane. Implement it in the terminal tRPC router (`apps/desktop/src/lib/trpc/routers/terminal/terminal.ts`) as a subscription that streams `{ paneId, workspaceId, type, ts }` events. Then add a small renderer hook/component mounted once (for example alongside `useAgentHookListener`) that listens for these events and calls `setPaneStatus(paneId, "review")` when the pane is not currently focused. The existing UI already renders status indicators in the tab strip and workspace list via `pane.status`.
+In the renderer, add a small listener mounted once (near `useAgentHookListener`) that receives terminal exit events and applies only the following rule:
+
+    If the affected `pane.status` is `working` or `permission`, set it to `idle`.
+
+It must never modify `review` (completed agent work should remain visible), and it must never set new non-idle statuses.
 
 Acceptance:
 
     bun run typecheck
     bun test apps/desktop/src/main/lib/terminal-host
 
-Manual verification: run a command that produces output in a background terminal. Confirm the tab shows an attention indicator and that switching to the tab clears it.
+Manual verification: start an agent so a pane is `working`, then force the underlying process to exit without a Stop hook (for example via a kill/crash scenario) while that pane is not mounted. Confirm the pane status does not remain stuck as `working`/`permission`.
 
 
 ### Milestone 4: Progressive Attach for Heavy Active Tabs (Split-Aware)
@@ -227,7 +259,15 @@ This milestone bounds the daemon’s memory and process usage and gives the user
 
 Work:
 
-Add a daemon-side policy for sessions with no attached UI clients. Track per-session timestamps (last attached, last output, last input). Implement an idle timeout and/or a maximum session cap, consistent with product decisions from Open Questions 2 and 3. Prefer conservative defaults and clear UI warnings over aggressive auto-eviction.
+Add a daemon-side session inventory (list sessions + basic metadata like createdAt/lastAttachedAt/attachedClients) and expose it via tRPC so the renderer can display “how many sessions exist”. This PR should prefer manual recovery tools and warnings over automatic eviction.
+
+Implement user-facing recovery actions:
+
+    - “Kill all sessions” (explicit confirmation)
+    - “Kill sessions for this workspace” (optional, if low-risk to implement)
+    - “Clear terminal history” (explicit confirmation)
+
+Do not enable automatic idle eviction by default in this PR. If we add idle timeouts / LRU eviction later, it should be a follow-up decision with clear UX.
 
 Add tRPC endpoints to list daemon sessions and to kill sessions (single and all). Expose them in the settings UI (`apps/desktop/src/renderer/screens/main/components/SettingsView/TerminalSettings.tsx`) as a “Manage sessions” surface with clear confirmations.
 
@@ -246,7 +286,7 @@ This milestone ensures the fixes stick. At completion, we have repeatable valida
 
 Work:
 
-Add unit/integration tests around the daemon protocol additions (activity subscription, attach-only, spawn limiting). Add a renderer-level test if the repo’s test setup supports it; otherwise document a deterministic manual verification checklist that a reviewer can run in under five minutes.
+Add unit/integration tests around the daemon protocol additions (session lifecycle signals if introduced, attach-only, spawn limiting). Add a renderer-level test if the repo’s test setup supports it; otherwise document a deterministic manual verification checklist that a reviewer can run in under five minutes.
 
 Acceptance:
 
@@ -263,10 +303,10 @@ Work:
 
 Update the PR description to include:
 
-    - A concise “what changed” summary tied to observable behavior (startup no longer restores everything, background activity badges, etc.).
+    - A concise “what changed” summary tied to observable behavior (startup no longer restores everything; warm set keeps up to 8 recent terminal tabs mounted per run for smooth switching; etc.).
     - The user-facing UX changes and any settings/flags involved (defaults and restart requirements).
-    - The key technical changes (renderer mount policy, attach/spawn limits, activity channel, cold restore semantics, daemon resource policy).
-    - Known risks and mitigations (reattach latency, noisy activity signals, resource limits).
+    - The key technical changes (renderer mount policy, attach/spawn limits, session lifecycle signals for correctness, cold restore semantics, daemon recovery tools).
+    - Known risks and mitigations (reattach latency, resource limits).
     - Exact validation steps run (commands and any manual scenarios).
 
 Ensure the description matches the final implementation details and file paths in this plan. If scope changed during implementation, update this ExecPlan to match before updating the PR description.
@@ -287,9 +327,10 @@ Always run:
 Key manual scenarios:
 
 1. Mass restore: create many terminal tabs/panes, restart app, confirm UI becomes interactive quickly and does not spawn dozens of shells at once.
-2. Background activity: run a long build in one terminal, switch away, confirm the tab shows attention on output/exit, and the indicator clears on view.
+2. Smooth switching: open several terminal tabs across multiple workspaces, switch between them repeatedly, confirm warm tabs switch without a noticeable attach delay.
 3. Heavy tab: open a tab with many panes; confirm the UI remains responsive and panes connect progressively.
-4. Cold restore: simulate daemon absence + existing history; confirm no shell starts until user clicks “Start Shell”.
+4. Agent status correctness: put a pane into `working`/`permission`, then force the underlying process to exit while the pane is not mounted; confirm status does not remain stuck.
+5. Cold restore: simulate daemon absence + existing history; confirm no shell starts until user clicks “Start Shell”.
 
 
 ## Idempotence and Safety
@@ -301,7 +342,7 @@ Avoid importing Node.js modules in renderer code. Any new renderer components mu
 
 ## Rollout Strategy
 
-Gate the new behaviors behind the existing “Terminal persistence” setting. If additional settings are introduced (for example background activity signals or auto-cleanup), default them conservatively and document them in the Terminal settings UI.
+Gate the new behaviors behind the existing “Terminal persistence” setting. If additional settings are introduced later (for example optional auto-cleanup, or future background output attention indicators), default them conservatively and document them in the Terminal settings UI.
 
 Ensure protocol changes include a robust upgrade path for stale daemons that may remain running across app updates.
 
@@ -310,7 +351,17 @@ Ensure protocol changes include a robust upgrade path for stale daemons that may
 
 The main DX risk is perceived latency when switching to a terminal that is not warm. Mitigate this by keeping a small warm set mounted, showing a fast “Resuming…” state when attaching, and ensuring attach is a fast path that avoids unnecessary disk I/O.
 
-Another risk is that background activity signals become noisy for chatty terminals. Mitigate this by throttling, coalescing, and allowing the user to disable or narrow notifications to exit/error only.
+Warm set sizing is a tradeoff between “instant tab switches” and steady-state renderer resources. Each mounted terminal pane keeps a live xterm.js instance with large scrollback (`scrollback: 10000` in `apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/Terminal/config.ts`), plus a canvas/WebGL renderer and an active stream subscription. Idle warm terminals should cost little CPU, but memory scales with the number of mounted terminal panes and how much scrollback/output they have accumulated. As a rough order-of-magnitude estimate, a single mounted terminal pane can be on the order of ~10–30MB of renderer memory once it has meaningful scrollback; a warm set of 8 single-pane tabs is therefore plausibly ~80–240MB of renderer memory. Milestone 0 must validate this with real measurements (Activity Monitor + our attach/mount counters), and we should reduce the warm set size (or add a secondary pane-count cap) if the observed cost is too high.
+
+If we choose to add background output attention indicators in a later PR, another risk is that they become noisy for chatty terminals. Mitigate this by throttling/coalescing, and making them opt-in and easy to disable.
+
+
+## DX Follow-Ups (Separate PRs)
+
+These are explicitly out of scope for this PR, but are natural next steps:
+
+1. Command completion notifications for arbitrary non-agent commands (for example “notify when `pnpm test` finishes”). This likely requires prompt-level hooks or an explicit “run with notify” wrapper so we can detect “command finished” without parsing output.
+2. Background output attention indicators (beyond correctness exit/error signals), such as “output after silence” badges for non-agent commands. This should not reuse `pane.status="review"` unless product agrees that “review” can mean “terminal has unread output”.
 
 
 ## Progress
@@ -318,7 +369,7 @@ Another risk is that background activity signals become noisy for chatty termina
 - [ ] Milestone 0: Baseline reproduction and instrumentation exists and is documented
 - [ ] Milestone 1: Renderer mount policy limits terminal tab mounts to active + warm set
 - [ ] Milestone 2: Main attach concurrency and daemon spawn concurrency limits added
-- [ ] Milestone 3: Background activity signals implemented and UI badges wired
+- [ ] Milestone 3: Hidden terminal lifecycle signals keep pane.status correct
 - [ ] Milestone 4: Progressive attach scheduler for heavy tabs implemented
 - [ ] Milestone 5: Cold restore semantics fixed and disk I/O optimized
 - [ ] Milestone 6: Daemon resource policy and session management UI shipped
