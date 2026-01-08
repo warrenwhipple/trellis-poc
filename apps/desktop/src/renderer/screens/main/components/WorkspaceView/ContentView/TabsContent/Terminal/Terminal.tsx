@@ -619,6 +619,10 @@ export const Terminal = ({
 			}
 		} catch (error) {
 			console.error("[Terminal] Restoration failed:", error);
+			// Fail-open: even on error, mark stream ready and flush pending events
+			// to prevent terminal from wedging with unbounded event queue
+			isStreamReadyRef.current = true;
+			flushPendingEvents();
 		}
 	}, [flushPendingEvents, paneId]);
 
@@ -1200,6 +1204,10 @@ export const Terminal = ({
 			modeScanBufferRef.current = "";
 			renderDisposableRef.current?.dispose();
 			renderDisposableRef.current = null;
+
+			// Clean up cold restore scrollback to prevent memory leak
+			// (scrollback can be MBs per pane, accumulates if not cleaned)
+			coldRestoreState.delete(paneId);
 
 			// Delay xterm.dispose() to let internal timeouts complete.
 			// xterm.open() schedules a setTimeout for Viewport.syncScrollArea.
