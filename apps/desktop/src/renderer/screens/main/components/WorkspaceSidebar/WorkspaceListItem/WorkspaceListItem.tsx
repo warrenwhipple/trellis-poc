@@ -15,7 +15,7 @@ import { Input } from "@superset/ui/input";
 import { toast } from "@superset/ui/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@superset/ui/tooltip";
 import { cn } from "@superset/ui/utils";
-import { useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { HiMiniXMark } from "react-icons/hi2";
 import { LuEye, LuEyeOff, LuFolder, LuFolderGit2 } from "react-icons/lu";
@@ -30,6 +30,7 @@ import { StatusIndicator } from "renderer/screens/main/components/StatusIndicato
 import { useWorkspaceRename } from "renderer/screens/main/hooks/useWorkspaceRename";
 import { useCloseWorkspacesList } from "renderer/stores/app-state";
 import { useTabsStore } from "renderer/stores/tabs/store";
+import type { TabsStore } from "renderer/stores/tabs/types";
 import { extractPaneIdsFromLayout } from "renderer/stores/tabs/utils";
 import { getHighestPriorityStatus } from "shared/tabs-types";
 import { STROKE_WIDTH } from "../constants";
@@ -83,8 +84,26 @@ export function WorkspaceListItem({
 	const closeWorkspacesList = useCloseWorkspacesList();
 	const [hasHovered, setHasHovered] = useState(false);
 	const rename = useWorkspaceRename(id, name);
-	const tabs = useTabsStore((s) => s.tabs);
-	const panes = useTabsStore((s) => s.panes);
+
+	// Granular selector: computes workspace status directly, returns primitive
+	// Only rerenders when the computed status actually changes
+	const workspaceStatusSelector = useCallback(
+		(s: TabsStore) => {
+			const workspaceTabs = s.tabs.filter((t) => t.workspaceId === id);
+			const paneIds = workspaceTabs.flatMap((t) =>
+				extractPaneIdsFromLayout(t.layout),
+			);
+			function* paneStatuses() {
+				for (const paneId of paneIds) {
+					yield s.panes[paneId]?.status;
+				}
+			}
+			return getHighestPriorityStatus(paneStatuses());
+		},
+		[id],
+	);
+	const workspaceStatus = useTabsStore(workspaceStatusSelector);
+
 	const clearWorkspaceAttentionStatus = useTabsStore(
 		(s) => s.clearWorkspaceAttentionStatus,
 	);
@@ -112,25 +131,6 @@ export function WorkspaceListItem({
 			staleTime: GITHUB_STATUS_STALE_TIME,
 		},
 	);
-
-	// Memoize workspace pane IDs to avoid recalculating on every render
-	const workspacePaneIds = useMemo(() => {
-		const workspaceTabs = tabs.filter((t) => t.workspaceId === id);
-		return new Set(
-			workspaceTabs.flatMap((t) => extractPaneIdsFromLayout(t.layout)),
-		);
-	}, [tabs, id]);
-
-	// Compute aggregate status for workspace using shared priority logic
-	const workspaceStatus = useMemo(() => {
-		// Generator avoids array allocation
-		function* paneStatuses() {
-			for (const paneId of workspacePaneIds) {
-				yield panes[paneId]?.status;
-			}
-		}
-		return getHighestPriorityStatus(paneStatuses());
-	}, [panes, workspacePaneIds]);
 
 	const handleClick = () => {
 		if (!rename.isRenaming) {
