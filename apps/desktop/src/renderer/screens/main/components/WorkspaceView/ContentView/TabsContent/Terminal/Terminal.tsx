@@ -5,7 +5,7 @@ import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import debounce from "lodash/debounce";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { trpc } from "renderer/lib/trpc";
 import { trpcClient } from "renderer/lib/trpc-client";
 import { useAppHotkey } from "renderer/stores/hotkeys";
@@ -27,14 +27,19 @@ import { TerminalSearch } from "./TerminalSearch";
 import type { TerminalProps, TerminalStreamEvent } from "./types";
 import { shellEscapePaths } from "./utils";
 
-export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
+export const Terminal = memo(function Terminal({
+	tabId,
+	workspaceId,
+}: TerminalProps) {
 	const paneId = tabId;
-	// Use granular selectors to avoid re-renders when other panes change
-	const pane = useTabsStore((s) => s.panes[paneId]);
-	const paneInitialCommands = pane?.initialCommands;
-	const paneInitialCwd = pane?.initialCwd;
+	// Use granular selectors to avoid re-renders when pane metadata (cwd, status) changes
+	// Only subscribe to the initial data we need (which doesn't change after creation)
+	const paneInitialCommands = useTabsStore(
+		(s) => s.panes[paneId]?.initialCommands,
+	);
+	const paneInitialCwd = useTabsStore((s) => s.panes[paneId]?.initialCwd);
+	const parentTabId = useTabsStore((s) => s.panes[paneId]?.tabId);
 	const clearPaneInitialData = useTabsStore((s) => s.clearPaneInitialData);
-	const parentTabId = pane?.tabId;
 	const terminalRef = useRef<HTMLDivElement>(null);
 	const xtermRef = useRef<XTerm | null>(null);
 	const fitAddonRef = useRef<FitAddon | null>(null);
@@ -50,7 +55,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	const updatePaneCwd = useTabsStore((s) => s.updatePaneCwd);
 	// Use granular selector - only subscribe to this tab's focused pane
 	const focusedPaneId = useTabsStore(
-		(s) => s.focusedPaneIds[pane?.tabId ?? ""],
+		(s) => s.focusedPaneIds[parentTabId ?? ""],
 	);
 	const addFileViewerPane = useTabsStore((s) => s.addFileViewerPane);
 	const setPaneStatus = useTabsStore((s) => s.setPaneStatus);
@@ -72,12 +77,13 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	paneInitialCwdRef.current = paneInitialCwd;
 	clearPaneInitialDataRef.current = clearPaneInitialData;
 
-	const { data: workspaceCwd } =
-		trpc.terminal.getWorkspaceCwd.useQuery(workspaceId);
+	const workspaceCwdQuery = trpc.terminal.getWorkspaceCwd.useQuery(workspaceId);
+	const workspaceCwd = workspaceCwdQuery.data;
 
 	// Query terminal link behavior setting
-	const { data: terminalLinkBehavior } =
+	const terminalLinkBehaviorQuery =
 		trpc.settings.getTerminalLinkBehavior.useQuery();
+	const terminalLinkBehavior = terminalLinkBehaviorQuery.data;
 
 	// Handler for file link clicks - uses current setting value
 	const handleFileLinkClick = useCallback(
@@ -237,7 +243,10 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 		}, 100),
 	);
 
-	const handleStreamData = (event: TerminalStreamEvent) => {
+	const handleStreamDataRef = useRef<(event: TerminalStreamEvent) => void>(
+		() => {},
+	);
+	handleStreamDataRef.current = (event: TerminalStreamEvent) => {
 		if (!xtermRef.current) {
 			return;
 		}
@@ -266,16 +275,21 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 		}
 	};
 
-	trpc.terminal.stream.useSubscription(paneId, {
-		onData: handleStreamData,
+	// Stable callback that delegates to ref (prevents subscription re-init on every render)
+	const stableOnData = useCallback((event: TerminalStreamEvent) => {
+		handleStreamDataRef.current(event);
+	}, []);
+
+	const _subscription = trpc.terminal.stream.useSubscription(paneId, {
+		onData: stableOnData,
 		enabled: true,
 	});
 
 	// Use ref to avoid triggering full terminal recreation when focus handler changes
 	const handleTerminalFocusRef = useRef(() => {});
 	handleTerminalFocusRef.current = () => {
-		if (pane?.tabId) {
-			setFocusedPane(pane.tabId, paneId);
+		if (parentTabId) {
+			setFocusedPane(parentTabId, paneId);
 		}
 	};
 
@@ -567,4 +581,4 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 			<div ref={terminalRef} className="h-full w-full" />
 		</div>
 	);
-};
+});

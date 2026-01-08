@@ -34,7 +34,6 @@ export function TabView({ tab }: TabViewProps) {
 	const movePaneToTab = useTabsStore((s) => s.movePaneToTab);
 	const movePaneToNewTab = useTabsStore((s) => s.movePaneToNewTab);
 	const allTabs = useTabsStore((s) => s.tabs);
-	const allPanes = useTabsStore((s) => s.panes);
 
 	// Get worktree path for file viewer panes
 	const { data: activeWorkspace } = trpc.workspaces.getActive.useQuery();
@@ -45,23 +44,15 @@ export function TabView({ tab }: TabViewProps) {
 		(t) => t.workspaceId === tab.workspaceId,
 	);
 
-	// Extract pane IDs from layout
-	const layoutPaneIds = useMemo(
-		() => extractPaneIdsFromLayout(tab.layout),
-		[tab.layout],
+	// Get all panes belonging to this tab
+	const allPanes = useTabsStore((s) => s.panes);
+	const tabPanes = useMemo(
+		() =>
+			Object.fromEntries(
+				Object.entries(allPanes).filter(([_, pane]) => pane.tabId === tab.id),
+			),
+		[allPanes, tab.id],
 	);
-
-	// Memoize the filtered panes to avoid creating new objects on every render
-	const tabPanes = useMemo(() => {
-		const result: Record<string, { tabId: string; type: string }> = {};
-		for (const paneId of layoutPaneIds) {
-			const pane = allPanes[paneId];
-			if (pane?.tabId === tab.id) {
-				result[paneId] = { tabId: pane.tabId, type: pane.type };
-			}
-		}
-		return result;
-	}, [layoutPaneIds, allPanes, tab.id]);
 
 	const validPaneIds = new Set(Object.keys(tabPanes));
 	const cleanedLayout = cleanLayout(tab.layout, validPaneIds);

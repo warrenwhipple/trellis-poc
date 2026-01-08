@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { MosaicBranch } from "react-mosaic-component";
 import {
 	registerPaneRef,
@@ -41,7 +41,7 @@ interface TabPaneProps {
 	onMoveToNewTab: () => void;
 }
 
-export function TabPane({
+export const TabPane = memo(function TabPane({
 	paneId,
 	path,
 	isActive,
@@ -128,4 +128,4 @@ export function TabPane({
 			</TabContentContextMenu>
 		</BasePaneWindow>
 	);
-}
+});
