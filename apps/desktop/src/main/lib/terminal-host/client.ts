@@ -664,6 +664,17 @@ export class TerminalHostClient extends EventEmitter {
 		this.streamAuthenticated = true;
 	}
 
+	/**
+	 * Send a request on the stream socket and wait for response.
+	 *
+	 * ORDERING ASSUMPTION: The daemon's hello handler writes the response synchronously
+	 * and only broadcasts to authenticated/registered stream sockets, so the response
+	 * is guaranteed to be the first frame. Any additional data in the same TCP read
+	 * (e.g., events that arrive immediately after auth) is fed to streamParser.
+	 *
+	 * If the daemon ever changes to emit events before the hello response, this method
+	 * would need to parse NDJSON frames in a loop until the matching id is found.
+	 */
 	private async sendRequestOnStream<T>({
 		type,
 		payload,
