@@ -377,20 +377,25 @@ export const Terminal = ({
 					: event.error;
 				console.warn("[Terminal] stream error:", message);
 
+				// "Session not found" means daemon restarted and lost our session -
+				// promote to connection error so retry UI appears and cold restore can kick in.
+				// Don't show toast for this case since we're showing the retry UI.
+				if (
+					event.code === "WRITE_FAILED" &&
+					event.error?.includes("Session not found")
+				) {
+					setConnectionError("Session lost - click to reconnect");
+					return;
+				}
+
+				// Show toast for other errors
 				toast.error("Terminal error", {
 					description: message,
 				});
 
 				// Don't block interaction for non-fatal issues like a paste drop or a
 				// transient write failure (we keep the session alive).
-				// EXCEPTION: "Session not found" means daemon restarted and lost our session -
-				// promote to connection error so retry UI appears and cold restore can kick in.
 				if (
-					event.code === "WRITE_FAILED" &&
-					event.error?.includes("Session not found")
-				) {
-					setConnectionError("Session lost - click to reconnect");
-				} else if (
 					event.code === "WRITE_QUEUE_FULL" ||
 					event.code === "WRITE_FAILED"
 				) {
@@ -814,18 +819,25 @@ export const Terminal = ({
 				: event.error;
 			console.warn("[Terminal] stream error:", message);
 
-			toast.error("Terminal error", {
-				description: message,
-			});
-
 			// "Session not found" means daemon restarted and lost our session -
 			// promote to connection error so retry UI appears and cold restore can kick in.
+			// Don't show toast for this case since we're showing the retry UI.
 			if (
 				event.code === "WRITE_FAILED" &&
 				event.error?.includes("Session not found")
 			) {
 				setConnectionError("Session lost - click to reconnect");
-			} else if (
+				return;
+			}
+
+			// Show toast for other errors
+			toast.error("Terminal error", {
+				description: message,
+			});
+
+			// Don't block interaction for non-fatal issues like a paste drop or a
+			// transient write failure (we keep the session alive).
+			if (
 				event.code === "WRITE_QUEUE_FULL" ||
 				event.code === "WRITE_FAILED"
 			) {
