@@ -283,6 +283,21 @@ export class DaemonTerminalManager extends EventEmitter {
 				console.error(
 					`[DaemonTerminalManager] Terminal error for ${paneId}: ${code ?? "UNKNOWN"}: ${error}`,
 				);
+
+				// "Session not found" means daemon restarted and lost this session.
+				// Clear the stale cache entry so next createOrAttach triggers cold restore.
+				if (error.includes("Session not found")) {
+					this.daemonAliveSessionIds.delete(paneId);
+					// Also mark session as not alive in our local tracking
+					const session = this.sessions.get(paneId);
+					if (session) {
+						session.isAlive = false;
+					}
+					console.log(
+						`[DaemonTerminalManager] Session ${paneId} lost - will trigger cold restore on next attach`,
+					);
+				}
+
 				this.emit(`error:${paneId}`, { error, code });
 			},
 		);
