@@ -167,7 +167,8 @@ export const createTerminalRouter = () => {
 					// If session is gone, emit exit instead of error.
 					// This prevents error toast floods when workspaces with terminals are deleted.
 					if (message.includes("not found or not alive")) {
-						terminalManager.emit(`exit:${input.paneId}`, 0, "SIGTERM");
+						// SIGTERM (15) - synthetic signal for consistent event typing.
+						terminalManager.emit(`exit:${input.paneId}`, 0, 15);
 						return;
 					}
 

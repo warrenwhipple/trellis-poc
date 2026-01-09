@@ -19,6 +19,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { SUPERSET_DIR_NAME } from "shared/constants";
 
+const MAX_HISTORY_BYTES = 5 * 1024 * 1024; // 5MB per session
+const MAX_PENDING_WRITE_BYTES = 256 * 1024; // cap in-memory backlog when disk is slow
+const DRAIN_TIMEOUT_MS = 1000;
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -73,8 +77,14 @@ export class HistoryWriter {
 	private scrollbackPath: string;
 	private metaPath: string;
 	private metadata: SessionMetadata;
+	private bytesWritten = 0;
 	private streamErrored = false;
 	private closed = false;
+	private isBackpressured = false;
+	private pendingWrites: Array<{ data: string; bytes: number }> = [];
+	private pendingWriteBytes = 0;
+	private warnedCapReached = false;
+	private warnedBackpressureDrop = false;
 
 	constructor(
 		workspaceId: string,
@@ -104,12 +114,23 @@ export class HistoryWriter {
 		// Write initial scrollback or create empty file
 		// node-pty produces UTF-8 strings, so we store as UTF-8
 		if (initialScrollback) {
-			await fs.writeFile(
-				this.scrollbackPath,
-				Buffer.from(initialScrollback, "utf8"),
-			);
+			// Ensure initial scrollback doesn't exceed our per-session cap.
+			const initialBytes = Buffer.byteLength(initialScrollback, "utf8");
+			if (initialBytes > MAX_HISTORY_BYTES) {
+				const truncated = initialScrollback.slice(-MAX_HISTORY_BYTES);
+				await fs.writeFile(this.scrollbackPath, truncated, "utf8");
+				this.bytesWritten = Buffer.byteLength(truncated, "utf8");
+				this.warnedCapReached = true;
+				console.warn(
+					`[HistoryWriter] Initial scrollback truncated for ${this.paneId} (${initialBytes} bytes > ${MAX_HISTORY_BYTES})`,
+				);
+			} else {
+				await fs.writeFile(this.scrollbackPath, initialScrollback, "utf8");
+				this.bytesWritten = initialBytes;
+			}
 		} else {
 			await fs.writeFile(this.scrollbackPath, Buffer.alloc(0));
+			this.bytesWritten = 0;
 		}
 
 		// Open stream in append mode for subsequent writes
@@ -121,6 +142,12 @@ export class HistoryWriter {
 			);
 			this.streamErrored = true;
 			this.stream = null;
+			this.pendingWrites = [];
+			this.pendingWriteBytes = 0;
+		});
+		this.stream.on("drain", () => {
+			this.isBackpressured = false;
+			this.flushPendingWrites();
 		});
 
 		// Write meta.json immediately (without endedAt)
@@ -139,10 +166,78 @@ export class HistoryWriter {
 		}
 
 		try {
+			const bytes = Buffer.byteLength(data, "utf8");
+			if (bytes === 0) {
+				return;
+			}
+
+			// Hard cap disk usage per session (best-effort; drop beyond cap).
+			if (this.bytesWritten + bytes > MAX_HISTORY_BYTES) {
+				if (!this.warnedCapReached) {
+					this.warnedCapReached = true;
+					console.warn(
+						`[HistoryWriter] History cap reached for ${this.paneId} (${MAX_HISTORY_BYTES} bytes); dropping additional output`,
+					);
+				}
+				return;
+			}
+
+			// Respect filesystem backpressure. When disk is slow, stop feeding the
+			// stream buffer and keep a small in-memory backlog; beyond that we drop.
+			if (this.isBackpressured || this.pendingWrites.length > 0) {
+				if (this.pendingWriteBytes + bytes > MAX_PENDING_WRITE_BYTES) {
+					if (!this.warnedBackpressureDrop) {
+						this.warnedBackpressureDrop = true;
+						console.warn(
+							`[HistoryWriter] Write backlog cap reached for ${this.paneId} (${MAX_PENDING_WRITE_BYTES} bytes); dropping history until drain`,
+						);
+					}
+					return;
+				}
+
+				this.pendingWrites.push({ data, bytes });
+				this.pendingWriteBytes += bytes;
+				this.bytesWritten += bytes;
+				return;
+			}
+
 			// node-pty produces UTF-8 strings
-			this.stream.write(Buffer.from(data, "utf8"));
+			this.bytesWritten += bytes;
+			const ok = this.stream.write(data, "utf8");
+			if (!ok) {
+				this.isBackpressured = true;
+			}
 		} catch {
 			this.streamErrored = true;
+		}
+	}
+
+	private flushPendingWrites(): void {
+		if (this.closed || this.streamErrored || !this.stream) {
+			return;
+		}
+		if (this.isBackpressured) {
+			return;
+		}
+
+		while (this.pendingWrites.length > 0) {
+			const next = this.pendingWrites.shift();
+			if (!next) return;
+			this.pendingWriteBytes = Math.max(0, this.pendingWriteBytes - next.bytes);
+
+			try {
+				const ok = this.stream.write(next.data, "utf8");
+				if (!ok) {
+					this.isBackpressured = true;
+					return;
+				}
+			} catch {
+				this.streamErrored = true;
+				this.stream = null;
+				this.pendingWrites = [];
+				this.pendingWriteBytes = 0;
+				return;
+			}
 		}
 	}
 
@@ -156,6 +251,7 @@ export class HistoryWriter {
 		}
 
 		return new Promise<void>((resolve) => {
+			this.flushPendingWrites();
 			// Cork and uncork forces a flush
 			this.stream?.once("drain", resolve);
 			// If nothing to drain, resolve immediately
@@ -173,6 +269,36 @@ export class HistoryWriter {
 			return;
 		}
 		this.closed = true;
+
+		// Best-effort: flush any pending backlog before closing.
+		while (
+			!this.streamErrored &&
+			this.stream &&
+			this.pendingWrites.length > 0
+		) {
+			this.flushPendingWrites();
+			if (this.isBackpressured) {
+				const stream = this.stream;
+				if (!stream) break;
+
+				const drained = await Promise.race([
+					new Promise<boolean>((resolve) =>
+						stream.once("drain", () => resolve(true)),
+					),
+					new Promise<boolean>((resolve) =>
+						setTimeout(() => resolve(false), DRAIN_TIMEOUT_MS),
+					),
+				]);
+
+				if (!drained) {
+					break;
+				}
+
+				this.isBackpressured = false;
+			}
+		}
+		this.pendingWrites = [];
+		this.pendingWriteBytes = 0;
 
 		// Close the stream
 		if (this.stream && !this.streamErrored) {
@@ -209,6 +335,12 @@ export class HistoryWriter {
 		this.stream = null;
 		this.streamErrored = false;
 		this.closed = false;
+		this.isBackpressured = false;
+		this.pendingWrites = [];
+		this.pendingWriteBytes = 0;
+		this.bytesWritten = 0;
+		this.warnedCapReached = false;
+		this.warnedBackpressureDrop = false;
 
 		// Reset metadata with new start time
 		this.metadata.startedAt = new Date().toISOString();
@@ -232,6 +364,8 @@ export class HistoryWriter {
 			});
 		}
 		this.stream = null;
+		this.pendingWrites = [];
+		this.pendingWriteBytes = 0;
 		this.closed = true;
 
 		// Delete the directory
@@ -335,8 +469,8 @@ export class HistoryReader {
 	/**
 	 * Delete history files for this session.
 	 */
-	cleanup(): void {
-		fs.rm(this.dir, { recursive: true, force: true }).catch((error) => {
+	async cleanup(): Promise<void> {
+		await fs.rm(this.dir, { recursive: true, force: true }).catch((error) => {
 			console.warn(
 				`[HistoryReader] Failed to cleanup history for ${this.paneId}:`,
 				error instanceof Error ? error.message : String(error),
