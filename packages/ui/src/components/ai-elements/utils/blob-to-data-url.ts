@@ -1,0 +1,21 @@
+/**
+ * Converts a blob URL to a data URL
+ * @param url - The blob URL to convert
+ * @returns The data URL, or null if conversion fails
+ */
+export async function convertBlobUrlToDataUrl(
+	url: string,
+): Promise<string | null> {
+	try {
+		const response = await fetch(url);
+		const blob = await response.blob();
+		return new Promise((resolve) => {
+			const reader = new FileReader();
+			reader.onloadend = () => resolve(reader.result as string);
+			reader.onerror = () => resolve(null);
+			reader.readAsDataURL(blob);
+		});
+	} catch {
+		return null;
+	}
+}

@@ -421,3 +421,57 @@ export const updateHistoryStack = (
 
 	return newStack;
 };
+
+/**
+ * Finds the next best tab to activate when closing a tab.
+ * Priority order:
+ * 1. Most recently used tab from history stack
+ * 2. Next/previous tab by position
+ * 3. Any remaining tab in the workspace
+ */
+export const findNextTab = (
+	tabs: Tab[],
+	tabHistoryStacks: Record<string, string[]>,
+	tabIdToClose: string,
+): string | null => {
+	const tabToClose = tabs.find((t) => t.id === tabIdToClose);
+	if (!tabToClose) return null;
+
+	const workspaceId = tabToClose.workspaceId;
+	const workspaceTabs = tabs.filter(
+		(t) => t.workspaceId === workspaceId && t.id !== tabIdToClose,
+	);
+
+	if (workspaceTabs.length === 0) return null;
+
+	// Try history first
+	const historyStack = tabHistoryStacks[workspaceId] || [];
+	for (const historyTabId of historyStack) {
+		if (historyTabId === tabIdToClose) continue;
+		if (workspaceTabs.some((t) => t.id === historyTabId)) {
+			return historyTabId;
+		}
+	}
+
+	// Try position-based (next, then previous)
+	const allWorkspaceTabs = tabs.filter((t) => t.workspaceId === workspaceId);
+	const currentIndex = allWorkspaceTabs.findIndex((t) => t.id === tabIdToClose);
+
+	if (currentIndex !== -1) {
+		const nextIndex = currentIndex + 1;
+		const prevIndex = currentIndex - 1;
+
+		if (
+			nextIndex < allWorkspaceTabs.length &&
+			allWorkspaceTabs[nextIndex].id !== tabIdToClose
+		) {
+			return allWorkspaceTabs[nextIndex].id;
+		}
+		if (prevIndex >= 0 && allWorkspaceTabs[prevIndex].id !== tabIdToClose) {
+			return allWorkspaceTabs[prevIndex].id;
+		}
+	}
+
+	// Fallback to first available
+	return workspaceTabs[0]?.id || null;
+};

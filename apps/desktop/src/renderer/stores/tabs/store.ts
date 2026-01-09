@@ -1,9 +1,13 @@
 import type { MosaicNode } from "react-mosaic-component";
-import { updateTree } from "react-mosaic-component";
 import { create } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import { trpcTabsStorage } from "../../lib/trpc-storage";
+import { addFileViewerPaneAction } from "./actions/file-viewer-actions";
 import { movePaneToNewTab, movePaneToTab } from "./actions/move-pane";
+import {
+	splitPaneHorizontal as splitPaneHorizontalAction,
+	splitPaneVertical as splitPaneVerticalAction,
+} from "./actions/split-actions";
 import type { AddFileViewerPaneOptions, TabsState, TabsStore } from "./types";
 import {
 	type CreatePaneOptions,
@@ -11,6 +15,7 @@ import {
 	createPane,
 	createTabWithPane,
 	extractPaneIdsFromLayout,
+	findNextTab,
 	getAdjacentPaneId,
 	getFirstPaneId,
 	getPaneIdsForTab,
@@ -18,58 +23,6 @@ import {
 	removePaneFromLayout,
 } from "./utils";
 import { killTerminalForPane } from "./utils/terminal-cleanup";
-
-/**
- * Finds the next best tab to activate when closing a tab.
- * Priority order:
- * 1. Most recently used tab from history stack
- * 2. Next/previous tab by position
- * 3. Any remaining tab in the workspace
- */
-const findNextTab = (state: TabsState, tabIdToClose: string): string | null => {
-	const tabToClose = state.tabs.find((t) => t.id === tabIdToClose);
-	if (!tabToClose) return null;
-
-	const workspaceId = tabToClose.workspaceId;
-	const workspaceTabs = state.tabs.filter(
-		(t) => t.workspaceId === workspaceId && t.id !== tabIdToClose,
-	);
-
-	if (workspaceTabs.length === 0) return null;
-
-	// Try history first
-	const historyStack = state.tabHistoryStacks[workspaceId] || [];
-	for (const historyTabId of historyStack) {
-		if (historyTabId === tabIdToClose) continue;
-		if (workspaceTabs.some((t) => t.id === historyTabId)) {
-			return historyTabId;
-		}
-	}
-
-	// Try position-based (next, then previous)
-	const allWorkspaceTabs = state.tabs.filter(
-		(t) => t.workspaceId === workspaceId,
-	);
-	const currentIndex = allWorkspaceTabs.findIndex((t) => t.id === tabIdToClose);
-
-	if (currentIndex !== -1) {
-		const nextIndex = currentIndex + 1;
-		const prevIndex = currentIndex - 1;
-
-		if (
-			nextIndex < allWorkspaceTabs.length &&
-			allWorkspaceTabs[nextIndex].id !== tabIdToClose
-		) {
-			return allWorkspaceTabs[nextIndex].id;
-		}
-		if (prevIndex >= 0 && allWorkspaceTabs[prevIndex].id !== tabIdToClose) {
-			return allWorkspaceTabs[prevIndex].id;
-		}
-	}
-
-	// Fallback to first available
-	return workspaceTabs[0]?.id || null;
-};
 
 export const useTabsStore = create<TabsStore>()(
 	devtools(
@@ -148,7 +101,11 @@ export const useTabsStore = create<TabsStore>()(
 					).filter((id) => id !== tabId);
 
 					if (state.activeTabIds[workspaceId] === tabId) {
-						newActiveTabIds[workspaceId] = findNextTab(state, tabId);
+						newActiveTabIds[workspaceId] = findNextTab(
+							state.tabs,
+							state.tabHistoryStacks,
+							tabId,
+						);
 					}
 
 					const newFocusedPaneIds = { ...state.focusedPaneIds };
@@ -387,143 +344,13 @@ export const useTabsStore = create<TabsStore>()(
 						return paneId;
 					}
 
-					const tabPaneIds = extractPaneIdsFromLayout(activeTab.layout);
-
-					// First, check if the file is already open in a pinned pane - if so, just focus it
-					const existingPinnedPane = tabPaneIds
-						.map((id) => state.panes[id])
-						.find(
-							(p) =>
-								p?.type === "file-viewer" &&
-								p.fileViewer?.isPinned &&
-								p.fileViewer.filePath === options.filePath &&
-								p.fileViewer.diffCategory === options.diffCategory &&
-								p.fileViewer.commitHash === options.commitHash,
-						);
-
-					if (existingPinnedPane) {
-						// File is already open in a pinned pane, just focus it
-						set({
-							focusedPaneIds: {
-								...state.focusedPaneIds,
-								[activeTab.id]: existingPinnedPane.id,
-							},
-						});
-						return existingPinnedPane.id;
-					}
-
-					// Look for an existing unpinned (preview) file-viewer pane in the active tab
-					const fileViewerPanes = tabPaneIds
-						.map((id) => state.panes[id])
-						.filter(
-							(p) =>
-								p?.type === "file-viewer" &&
-								p.fileViewer &&
-								!p.fileViewer.isPinned,
-						);
-
-					// If we found an unpinned (preview) file-viewer pane, check if it's the same file
-					if (fileViewerPanes.length > 0) {
-						const paneToReuse = fileViewerPanes[0];
-						const existingFileViewer = paneToReuse.fileViewer;
-						if (!existingFileViewer) {
-							// Should not happen due to filter above, but satisfy type checker
-							return "";
-						}
-
-						// If clicking the same file that's already in preview, pin it
-						const isSameFile =
-							existingFileViewer.filePath === options.filePath &&
-							existingFileViewer.diffCategory === options.diffCategory &&
-							existingFileViewer.commitHash === options.commitHash;
-
-						if (isSameFile) {
-							// Pin the preview pane
-							set({
-								panes: {
-									...state.panes,
-									[paneToReuse.id]: {
-										...paneToReuse,
-										fileViewer: {
-											...existingFileViewer,
-											isPinned: true,
-										},
-									},
-								},
-								focusedPaneIds: {
-									...state.focusedPaneIds,
-									[activeTab.id]: paneToReuse.id,
-								},
-							});
-							return paneToReuse.id;
-						}
-
-						// Different file - replace the preview pane content
-						const fileName =
-							options.filePath.split("/").pop() || options.filePath;
-
-						// Determine default view mode
-						let viewMode: "raw" | "rendered" | "diff" = "raw";
-						if (options.diffCategory) {
-							viewMode = "diff";
-						} else if (
-							options.filePath.endsWith(".md") ||
-							options.filePath.endsWith(".markdown") ||
-							options.filePath.endsWith(".mdx")
-						) {
-							viewMode = "rendered";
-						}
-
-						set({
-							panes: {
-								...state.panes,
-								[paneToReuse.id]: {
-									...paneToReuse,
-									name: fileName,
-									fileViewer: {
-										filePath: options.filePath,
-										viewMode,
-										isPinned: options.isPinned ?? false,
-										diffLayout: "inline",
-										diffCategory: options.diffCategory,
-										commitHash: options.commitHash,
-										oldPath: options.oldPath,
-										initialLine: options.line,
-										initialColumn: options.column,
-									},
-								},
-							},
-							focusedPaneIds: {
-								...state.focusedPaneIds,
-								[activeTab.id]: paneToReuse.id,
-							},
-						});
-
-						return paneToReuse.id;
-					}
-
-					// No reusable pane found, create a new one
-					const newPane = createFileViewerPane(activeTab.id, options);
-
-					const newLayout: MosaicNode<string> = {
-						direction: "row",
-						first: activeTab.layout,
-						second: newPane.id,
-						splitPercentage: 50,
-					};
-
-					set({
-						tabs: state.tabs.map((t) =>
-							t.id === activeTab.id ? { ...t, layout: newLayout } : t,
-						),
-						panes: { ...state.panes, [newPane.id]: newPane },
-						focusedPaneIds: {
-							...state.focusedPaneIds,
-							[activeTab.id]: newPane.id,
-						},
-					});
-
-					return newPane.id;
+					const { result, paneId } = addFileViewerPaneAction(
+						state,
+						activeTab,
+						options,
+					);
+					set(result);
+					return paneId;
 				},
 
 				removePane: (paneId) => {
@@ -719,101 +546,25 @@ export const useTabsStore = create<TabsStore>()(
 
 				// Split operations
 				splitPaneVertical: (tabId, sourcePaneId, path, options) => {
-					const state = get();
-					const tab = state.tabs.find((t) => t.id === tabId);
-					if (!tab) return;
-
-					const sourcePane = state.panes[sourcePaneId];
-					if (!sourcePane || sourcePane.tabId !== tabId) return;
-
-					// Always create a new terminal when splitting
-					const newPane = createPane(tabId, "terminal", options);
-
-					let newLayout: MosaicNode<string>;
-					if (path && path.length > 0) {
-						// Split at a specific path in the layout
-						newLayout = updateTree(tab.layout, [
-							{
-								path,
-								spec: {
-									$set: {
-										direction: "row",
-										first: sourcePaneId,
-										second: newPane.id,
-										splitPercentage: 50,
-									},
-								},
-							},
-						]);
-					} else {
-						// Split the pane directly
-						newLayout = {
-							direction: "row",
-							first: tab.layout,
-							second: newPane.id,
-							splitPercentage: 50,
-						};
-					}
-
-					set({
-						tabs: state.tabs.map((t) =>
-							t.id === tabId ? { ...t, layout: newLayout } : t,
-						),
-						panes: { ...state.panes, [newPane.id]: newPane },
-						focusedPaneIds: {
-							...state.focusedPaneIds,
-							[tabId]: newPane.id,
-						},
-					});
+					const result = splitPaneVerticalAction(
+						get(),
+						tabId,
+						sourcePaneId,
+						path,
+						options,
+					);
+					if (result) set(result);
 				},
 
 				splitPaneHorizontal: (tabId, sourcePaneId, path, options) => {
-					const state = get();
-					const tab = state.tabs.find((t) => t.id === tabId);
-					if (!tab) return;
-
-					const sourcePane = state.panes[sourcePaneId];
-					if (!sourcePane || sourcePane.tabId !== tabId) return;
-
-					// Always create a new terminal when splitting
-					const newPane = createPane(tabId, "terminal", options);
-
-					let newLayout: MosaicNode<string>;
-					if (path && path.length > 0) {
-						// Split at a specific path in the layout
-						newLayout = updateTree(tab.layout, [
-							{
-								path,
-								spec: {
-									$set: {
-										direction: "column",
-										first: sourcePaneId,
-										second: newPane.id,
-										splitPercentage: 50,
-									},
-								},
-							},
-						]);
-					} else {
-						// Split the pane directly
-						newLayout = {
-							direction: "column",
-							first: tab.layout,
-							second: newPane.id,
-							splitPercentage: 50,
-						};
-					}
-
-					set({
-						tabs: state.tabs.map((t) =>
-							t.id === tabId ? { ...t, layout: newLayout } : t,
-						),
-						panes: { ...state.panes, [newPane.id]: newPane },
-						focusedPaneIds: {
-							...state.focusedPaneIds,
-							[tabId]: newPane.id,
-						},
-					});
+					const result = splitPaneHorizontalAction(
+						get(),
+						tabId,
+						sourcePaneId,
+						path,
+						options,
+					);
+					if (result) set(result);
 				},
 
 				splitPaneAuto: (tabId, sourcePaneId, dimensions, path, options) => {
