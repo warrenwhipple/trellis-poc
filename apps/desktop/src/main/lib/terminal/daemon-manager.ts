@@ -191,6 +191,12 @@ export class DaemonTerminalManager extends EventEmitter {
 		this.client.on("data", (sessionId: string, data: string) => {
 			// The sessionId from daemon is the paneId
 			const paneId = sessionId;
+			if (DEBUG_TERMINAL) {
+				const listenerCount = this.listenerCount(`data:${paneId}`);
+				console.log(
+					`[DaemonTerminalManager] Received data from daemon: paneId=${paneId}, bytes=${data.length}, listeners=${listenerCount}`,
+				);
+			}
 
 			// Update session state
 			const session = this.sessions.get(paneId);
@@ -845,11 +851,10 @@ export class DaemonTerminalManager extends EventEmitter {
 		const { paneId, deleteHistory = false } = params;
 		this.daemonAliveSessionIds.delete(paneId);
 
-		// Emit exit event BEFORE killing so tRPC subscriptions complete cleanly.
+		// Emit exit event BEFORE killing so the renderer can stop sending input.
 		// This prevents WRITE_FAILED errors when the daemon kills the session
 		// but React components are still mounted with active subscriptions.
-		// The daemon will also emit an exit event, but duplicate events are
-		// harmless since emit.complete() has already been called.
+		// The daemon will also emit an exit event; duplicates are harmless.
 		const session = this.sessions.get(paneId);
 		if (session?.isAlive) {
 			session.isAlive = false;
@@ -1023,7 +1028,7 @@ export class DaemonTerminalManager extends EventEmitter {
 
 		for (const paneId of paneIdsToKill) {
 			try {
-				// Emit exit event BEFORE killing so tRPC subscriptions complete cleanly.
+				// Emit exit event BEFORE killing so the renderer can stop sending input.
 				// This prevents WRITE_FAILED error toast floods when deleting workspaces.
 				const session = this.sessions.get(paneId);
 				if (session?.isAlive) {

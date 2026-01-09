@@ -165,8 +165,7 @@ export const createTerminalRouter = () => {
 						error instanceof Error ? error.message : "Write failed";
 
 					// If session is gone, emit exit instead of error.
-					// This completes the subscription cleanly and prevents error toast floods
-					// when workspaces with terminals are deleted.
+					// This prevents error toast floods when workspaces with terminals are deleted.
 					if (message.includes("not found or not alive")) {
 						terminalManager.emit(`exit:${input.paneId}`, 0, "SIGTERM");
 						return;
@@ -400,15 +399,19 @@ export const createTerminalRouter = () => {
 						if (DEBUG_TERMINAL && !firstDataReceived) {
 							firstDataReceived = true;
 							console.log(
-								`[Terminal Stream] First data event for ${paneId}: ${data.length} bytes`,
+								`[Terminal Stream] First data for ${paneId}: ${data.length} bytes`,
 							);
 						}
 						emit.next({ type: "data", data });
 					};
 
 					const onExit = (exitCode: number, signal?: number) => {
+						// IMPORTANT: Do not `emit.complete()` on exit.
+						// The renderer uses a stable `paneId` input and `@trpc/react-query`
+						// won't auto-resubscribe after completion unless the subscription key changes.
+						// We reuse the same paneId across restarts/cold restore, so completing here
+						// would strand the pane with no listeners (terminal output never renders again).
 						emit.next({ type: "exit", exitCode, signal });
-						emit.complete();
 					};
 
 					const onDisconnect = (reason: string) => {

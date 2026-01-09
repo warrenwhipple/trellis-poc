@@ -96,6 +96,24 @@ Sessions track `terminatingAt` timestamp when `kill()` is called. The `isAttacha
 
 The subprocess flushes all buffered output before sending the exit frame, so clients receive all terminal output before the exit event.
 
+## Renderer Integration Notes (tRPC)
+
+The renderer does **not** talk to the daemon directly. It consumes terminal output via the `terminal.stream` tRPC subscription (`apps/desktop/src/lib/trpc/routers/terminal/terminal.ts`), which bridges the main-process `TerminalManager`/`DaemonTerminalManager` EventEmitter.
+
+### `exit` must not complete the subscription
+
+Treat `exit` as a **state transition**, not a terminal end-of-stream:
+
+- The renderer subscribes with a stable `paneId` input (`trpc.terminal.stream.useSubscription(paneId)`).
+- `@trpc/react-query` does **not** auto-resubscribe after a subscription completes unless the input/key changes.
+- We reuse the same `paneId` across restarts / cold restore (new session, same pane).
+
+So the server-side observable must **not** call `emit.complete()` on `exit`, otherwise the pane becomes permanently detached from output (`listeners=0` in `DaemonTerminalManager` logs) even after a new shell is started.
+
+### Cold restore overlay: drop stale queued events
+
+During cold restore, the renderer intentionally pauses streaming (`isStreamReady=false`) while showing a read-only overlay. Stream events can be queued during this period. Before starting a new shell, the renderer should discard any queued events from the pre-restore session (especially stale `exit`) so they can't mark the new session as exited and trigger an unintended `restartTerminal()` (which clears the UI).
+
 ## Usage Example
 
 ```typescript
