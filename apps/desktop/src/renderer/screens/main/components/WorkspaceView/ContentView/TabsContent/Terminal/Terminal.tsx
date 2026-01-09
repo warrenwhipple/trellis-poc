@@ -388,6 +388,17 @@ export const Terminal = ({
 					return;
 				}
 
+				// "PTY not spawned" is a transient race condition during recovery -
+				// the write was attempted before PTY finished initializing. Skip toast,
+				// just log to terminal. The session will recover on its own.
+				if (
+					event.code === "WRITE_FAILED" &&
+					event.error?.includes("PTY not spawned")
+				) {
+					xterm.writeln(`\r\n[Terminal] ${message}`);
+					return;
+				}
+
 				// Show toast for other errors
 				toast.error("Terminal error", {
 					description: message,
@@ -827,6 +838,17 @@ export const Terminal = ({
 				event.error?.includes("Session not found")
 			) {
 				setConnectionError("Session lost - click to reconnect");
+				return;
+			}
+
+			// "PTY not spawned" is a transient race condition during recovery -
+			// the write was attempted before PTY finished initializing. Skip toast,
+			// just log to terminal. The session will recover on its own.
+			if (
+				event.code === "WRITE_FAILED" &&
+				event.error?.includes("PTY not spawned")
+			) {
+				xtermRef.current.writeln(`\r\n[Terminal] ${message}`);
 				return;
 			}
 
