@@ -10,6 +10,7 @@ import {
 } from "main/lib/terminal";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
+import { assertWorkspaceUsable } from "../workspaces/utils/usability";
 import { getWorkspacePath } from "../workspaces/utils/worktree";
 import { resolveCwd } from "./utils";
 
@@ -77,6 +78,9 @@ export const createTerminalRouter = () => {
 				const workspacePath = workspace
 					? (getWorkspacePath(workspace) ?? undefined)
 					: undefined;
+				if (workspace?.type === "worktree") {
+					assertWorkspaceUsable(workspaceId, workspacePath);
+				}
 				const cwd = resolveCwd(cwdOverride, workspacePath);
 
 				if (DEBUG_TERMINAL) {
