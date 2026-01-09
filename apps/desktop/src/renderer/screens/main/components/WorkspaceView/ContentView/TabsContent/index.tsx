@@ -127,14 +127,14 @@ export function TabsContent() {
 									pointerEvents: isVisible ? "auto" : "none",
 								}}
 							>
-								<TabView tab={tab} panes={panes} isTabVisible={isVisible} />
+								<TabView tab={tab} isTabVisible={isVisible} />
 							</div>
 						);
 					})}
 					{/* Active non-terminal tab: render normally (unmounts when switching) */}
 					{activeNonTerminalTab && (
 						<div className="absolute inset-0">
-							<TabView tab={activeNonTerminalTab} panes={panes} isTabVisible />
+							<TabView tab={activeNonTerminalTab} isTabVisible />
 						</div>
 					)}
 					{/* Fallback: show empty view without unmounting terminal tabs */}
@@ -166,7 +166,7 @@ export function TabsContent() {
 		<div className="flex-1 min-h-0 flex overflow-hidden">
 			<div className="flex-1 min-w-0 overflow-hidden">
 				{tabToRender ? (
-					<TabView tab={tabToRender} panes={panes} isTabVisible />
+					<TabView tab={tabToRender} isTabVisible />
 				) : (
 					<EmptyTabView />
 				)}

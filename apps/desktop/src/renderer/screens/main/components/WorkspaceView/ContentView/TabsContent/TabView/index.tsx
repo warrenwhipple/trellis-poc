@@ -10,7 +10,7 @@ import {
 import { dragDropManager } from "renderer/lib/dnd";
 import { trpc } from "renderer/lib/trpc";
 import { useTabsStore } from "renderer/stores/tabs/store";
-import type { Pane, Tab } from "renderer/stores/tabs/types";
+import type { Tab } from "renderer/stores/tabs/types";
 import { useTabsWithPresets } from "renderer/stores/tabs/useTabsWithPresets";
 import {
 	cleanLayout,
@@ -21,11 +21,10 @@ import { TabPane } from "./TabPane";
 
 interface TabViewProps {
 	tab: Tab;
-	panes: Record<string, Pane>;
 	isTabVisible?: boolean;
 }
 
-export function TabView({ tab, panes, isTabVisible = true }: TabViewProps) {
+export function TabView({ tab, isTabVisible = true }: TabViewProps) {
 	const updateTabLayout = useTabsStore((s) => s.updateTabLayout);
 	const removePane = useTabsStore((s) => s.removePane);
 	const removeTab = useTabsStore((s) => s.removeTab);

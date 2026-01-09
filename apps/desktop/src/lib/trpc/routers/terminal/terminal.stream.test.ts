@@ -28,7 +28,7 @@ describe("terminal.stream", () => {
 		terminalManager = new EventEmitter();
 
 		const router = createTerminalRouter();
-		const caller = router.createCaller({} as any);
+		const caller = router.createCaller({} as never);
 		const stream$ = await caller.stream("pane-1");
 
 		const events: Array<{ type: string }> = [];
