@@ -77,7 +77,7 @@ export class HistoryWriter {
 	private closed = false;
 
 	constructor(
-		private workspaceId: string,
+		workspaceId: string,
 		private paneId: string,
 		cwd: string,
 		cols: number,
@@ -274,7 +274,7 @@ export class HistoryReader {
 	private metaPath: string;
 
 	constructor(
-		private workspaceId: string,
+		workspaceId: string,
 		private paneId: string,
 	) {
 		this.dir = getHistoryDir(workspaceId, paneId);

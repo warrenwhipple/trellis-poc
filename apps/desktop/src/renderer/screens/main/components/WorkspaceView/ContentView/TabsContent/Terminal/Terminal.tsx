@@ -898,10 +898,7 @@ export const Terminal = ({
 
 			// Don't block interaction for non-fatal issues like a paste drop or a
 			// transient write failure (we keep the session alive).
-			if (
-				event.code === "WRITE_QUEUE_FULL" ||
-				event.code === "WRITE_FAILED"
-			) {
+			if (event.code === "WRITE_QUEUE_FULL" || event.code === "WRITE_FAILED") {
 				xtermRef.current.writeln(`\r\n[Terminal] ${message}`);
 			} else {
 				setConnectionError(message);

@@ -35,9 +35,7 @@ function pump(): void {
 		if (!task) return;
 		if (task.canceled) {
 			if (DEBUG_SCHEDULER) {
-				console.log(
-					`[AttachScheduler] Skipping canceled task: ${task.paneId}`,
-				);
+				console.log(`[AttachScheduler] Skipping canceled task: ${task.paneId}`);
 			}
 			continue;
 		}
@@ -46,9 +44,7 @@ function pump(): void {
 		const current = pendingByPaneId.get(task.paneId);
 		if (current !== task) {
 			if (DEBUG_SCHEDULER) {
-				console.log(
-					`[AttachScheduler] Skipping replaced task: ${task.paneId}`,
-				);
+				console.log(`[AttachScheduler] Skipping replaced task: ${task.paneId}`);
 			}
 			continue;
 		}
@@ -151,7 +147,9 @@ export function scheduleTerminalAttach({
 		existing.canceled = true;
 		pendingByPaneId.delete(paneId);
 		if (DEBUG_SCHEDULER) {
-			console.log(`[AttachScheduler] Canceled existing pending task: ${paneId}`);
+			console.log(
+				`[AttachScheduler] Canceled existing pending task: ${paneId}`,
+			);
 		}
 	}
 
