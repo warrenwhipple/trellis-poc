@@ -5,6 +5,42 @@ This ExecPlan is a living document. The sections `Progress`, `Surprises & Discov
 Reference: This plan follows conventions from `AGENTS.md`, `apps/desktop/AGENTS.md`, and the ExecPlan template in `.agents/commands/create-plan.md`.
 
 
+## Table of Contents
+
+- [Purpose / Big Picture](#purpose--big-picture)
+- [Context / Orientation (Repository Map)](#context--orientation-repository-map)
+- [Problem Statement](#problem-statement)
+- [Definitions (Plain Language)](#definitions-plain-language)
+- [Non-Goals](#non-goals)
+- [Assumptions](#assumptions)
+- [Future Backend: Remote Runner / Cloud Terminals](#future-backend-remote-runner--cloud-terminals)
+- [Open Questions](#open-questions)
+- [Plan of Work](#plan-of-work)
+- [Target Shape (After Refactor)](#target-shape-after-refactor)
+  - [File Tree (Proposed)](#file-tree-proposed)
+  - [Terminal Runtime Types (Main Process)](#terminal-runtime-types-main-process)
+  - [tRPC Router Shape (No Daemon Type Checks)](#trpc-router-shape-no-daemon-type-checks)
+  - [Renderer Decomposition (Reducing `Terminal.tsx` Branching)](#renderer-decomposition-reducing-terminaltsx-branching)
+  - [Diagrams (Call Flow)](#diagrams-call-flow)
+- [Milestones](#milestone-1-establish-a-backend-contract-and-invariants)
+  - [Milestone 1](#milestone-1-establish-a-backend-contract-and-invariants)
+  - [Milestone 2](#milestone-2-implement-terminalruntime-facade--capabilities)
+  - [Milestone 3](#milestone-3-migrate-trpc-terminal-router-to-the-runtime)
+  - [Milestone 4](#milestone-4-add-regression-coverage-for-the-abstraction-boundary)
+  - [Milestone 5](#milestone-5-manual-verification-high-coverage-low-surprises)
+  - [Milestone 6a](#milestone-6a-build-a-terminal-init-plan-renderer)
+  - [Milestone 6b](#milestone-6b-stream-subscription--buffering-hook-renderer)
+  - [Milestone 6c](#milestone-6c-integrate-helpers-into-terminaltsx-ui-wiring-only)
+  - [Milestone 7 (Optional)](#milestone-7-optional--cloud-readiness-introduce-backendsessionid)
+- [Validation](#validation)
+- [Idempotence / Safety](#idempotence--safety)
+- [Risks and Mitigations](#risks-and-mitigations)
+- [Progress](#progress)
+- [Surprises & Discoveries](#surprises--discoveries)
+- [Decision Log](#decision-log)
+- [Outcomes & Retrospective](#outcomes--retrospective)
+
+
 ## Purpose / Big Picture
 
 After this change, the desktop app still supports terminal persistence (daemon mode with cold restore) exactly as it does today, but the codebase no longer leaks “daemon vs in-process” branching across the tRPC router and UI. The backend selection becomes a single responsibility owned by `apps/desktop/src/main/lib/terminal/`, making the feature easier to review, less fragile, and a better foundation for future “cloud terminal” backends.
@@ -72,6 +108,60 @@ This refactor is intentionally conservative to avoid regressions:
 2. The terminal persistence setting (`settings.terminalPersistence`) is treated as “requires restart” today; we keep that behavior for this refactor.
 3. tRPC subscriptions must use `observable` (per `apps/desktop/AGENTS.md`); we will not introduce generator-based subscriptions.
 4. The most important regression to prevent is the “listeners=0” cold-restore failure mode; specifically, the `terminal.stream` subscription must not complete on exit.
+
+
+## Future Backend: Remote Runner / Cloud Terminals
+
+This plan intentionally does not implement cloud terminals, but the abstraction boundary should be compatible with adding a backend that runs terminal sessions inside a remote “runner” (a background agent on a server) while preserving Superset Desktop concepts like worktrees, “changes” (diff/status), and agent lifecycle indicators.
+
+### What’s local-only today (current coupling)
+
+1. **Terminal IO keys by `paneId` (client identity):** `terminal.createOrAttach`, `terminal.write`, and `terminal.stream` treat `paneId` as the stable session key (`apps/desktop/src/lib/trpc/routers/terminal/terminal.ts`).
+2. **Agent lifecycle events assume localhost hooks:** terminal env injects `SUPERSET_*` and `SUPERSET_PORT` (`apps/desktop/src/main/lib/terminal/env.ts`), and the notify hook script `curl`s `http://127.0.0.1:$SUPERSET_PORT/hook/complete` (`apps/desktop/src/main/lib/agent-setup/templates/notify-hook.template.sh`). This cannot work from a remote runner.
+3. **“Changes” assumes local worktree filesystem:** git status/diff/staging/commit/push/pull operate against a local `worktreePath` using `simple-git`, and file reads/writes are guarded by secure path validation (`apps/desktop/src/lib/trpc/routers/changes/*`).
+
+### How this plan enables remote terminals (what’s already aligned)
+
+1. **Backend-agnostic event delivery:** `TerminalEventSource.subscribe…() => unsubscribe` is compatible with WebSocket/SSE backends and avoids leaking Node `EventEmitter` semantics.
+2. **Capabilities over “mode strings”:** cloud backends can expose a capability surface without introducing a new `"cloud"` mode string that bleeds into callers.
+3. **Identity decoupling is planned:** Milestone 7 (optional) calls out introducing `backendSessionId`, which is required for cloud (server-assigned IDs, multi-device access).
+
+### The key realization: cloud terminals need a Workspace Runtime, not just a Terminal Runtime
+
+A remote runner cannot be “just a terminal backend” if we want to preserve the current UX. To retain worktrees, diffs, and agent status, the system needs a workspace-scoped runtime with at least these responsibilities:
+
+1. **terminal:** interactive PTY sessions (create/attach/write/resize/kill/detach + stream events)
+2. **agentEvents:** lifecycle signals (“Start/Stop/PermissionRequest”) delivered to the desktop UI
+3. **git + files:** status/diff/staging/commit/push/pull + safe file read/write (or an explicit sync layer)
+4. **sync (if local stays canonical):** bidirectional worktree synchronization when execution happens remotely
+
+The `TerminalRuntime` abstraction created in this plan should become one *component* of a broader “WorkspaceRuntime” concept as cloud work gets closer.
+
+### Preserving “agent interactions” in a remote runner world
+
+Today, pane statuses are driven by the notifications subscription (`apps/desktop/src/renderer/stores/tabs/useAgentHookListener.ts`), which consumes events emitted by a local notifications server (`apps/desktop/src/main/lib/notifications/server.ts`). For remote execution, we need a different source of lifecycle signals:
+
+- **Hook proxy model (max compatibility):** keep the same CLI hook scripts, but point them to a hook receiver running inside the runner; the runner forwards lifecycle events to the desktop over an authenticated channel (then desktop re-emits to the renderer through the existing notifications subscription path).
+- **Native runner events (long-term):** the runner emits lifecycle events directly (no `curl` hook required), still flowing into the same renderer contract (`NOTIFICATION_EVENTS.AGENT_LIFECYCLE`).
+
+### “Changes” + worktrees: two viable architectures (must decide)
+
+**A) Remote worktree is source-of-truth**
+- Runner owns checkout, git operations, and file access.
+- Desktop “changes” router becomes a façade that delegates to local or remote implementations.
+- Tradeoff: “open in editor” and local tooling become harder unless we introduce a local mirror/remote FS integration.
+
+**B) Local worktree is source-of-truth (desktop remains canonical)**
+- Keep existing local worktrees and “changes” behavior.
+- Runner is compute-only and requires explicit sync (local → remote before execution; remote → local after).
+- Tradeoff: requires a real sync protocol (patch-based or git-based), conflict handling, and clear UX around divergence.
+
+This decision materially changes the scope and correctness model of cloud terminals; we should not start implementing a cloud backend until this is chosen.
+
+### Compatibility notes (naming + semantics)
+
+1. The current plan uses `daemon: DaemonManagement | null` as the capability object. For cloud, that concept should generalize to something like `management: TerminalManagement | null` (daemon is an implementation detail).
+2. Capability presence should mean “configured/available”, not “healthy right now”; mid-session disconnects should surface errors + explicit connection lifecycle events rather than silently flipping capabilities at runtime.
 
 
 ## Open Questions
