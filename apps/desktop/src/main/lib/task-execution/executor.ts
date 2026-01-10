@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import {
+	agentMemory,
 	type InsertWorkspace,
 	type InsertWorktree,
 	planTasks,
@@ -22,6 +23,7 @@ import {
 	taskExecutionManager,
 	type TaskExecutionOutput,
 } from "./manager";
+import { taskTerminalBridge } from "./terminal-bridge";
 
 interface ExecutionJob {
 	taskId: string;
@@ -109,7 +111,7 @@ export async function executeTask(
 		// Step 2: Run Claude in the worktree
 		manager.updateProgress(taskId, "running", "Running Claude...");
 
-		const prompt = buildClaudePrompt(task);
+		const prompt = buildClaudePrompt({ task, projectId });
 
 		await runClaudeInWorktree({
 			taskId,
@@ -284,16 +286,41 @@ async function createTaskWorktree({
 }
 
 /**
- * Build the prompt for Claude based on task details
+ * Build the prompt for Claude based on task details and shared context
  */
-function buildClaudePrompt(task: { title: string; description: string | null }): string {
+function buildClaudePrompt({
+	task,
+	projectId,
+}: {
+	task: { title: string; description: string | null };
+	projectId: string;
+}): string {
 	let prompt = `Task: ${task.title}\n\n`;
 
 	if (task.description) {
 		prompt += `Description:\n${task.description}\n\n`;
 	}
 
-	prompt += `Please complete this task. When you're done, commit your changes with a descriptive commit message.`;
+	// Fetch shared memory context for this project
+	const memories = localDb
+		.select()
+		.from(agentMemory)
+		.where(eq(agentMemory.projectId, projectId))
+		.all();
+
+	// Include relevant shared context in the prompt
+	if (memories.length > 0) {
+		prompt += `## Shared Context (from orchestrator)\n`;
+		prompt += `The following context has been shared by the orchestrator for this task:\n\n`;
+
+		for (const memory of memories) {
+			prompt += `### ${memory.key}\n${memory.value}\n\n`;
+		}
+	}
+
+	prompt += `## Instructions\n`;
+	prompt += `Please complete this task. When you're done, commit your changes with a descriptive commit message.\n`;
+	prompt += `If you encounter any blockers or need to make important decisions, note them in your output so the orchestrator can track them.`;
 
 	return prompt;
 }
@@ -307,7 +334,7 @@ interface RunClaudeParams {
 }
 
 /**
- * Run Claude in a worktree
+ * Run Claude in a worktree using the terminal bridge for interactive sessions
  */
 async function runClaudeInWorktree({
 	taskId,
@@ -316,9 +343,6 @@ async function runClaudeInWorktree({
 	manager,
 	abortSignal,
 }: RunClaudeParams): Promise<void> {
-	// Import execa dynamically
-	const { execa } = await import("execa");
-
 	const emitOutput = (
 		type: TaskExecutionOutput["type"],
 		content: string,
@@ -331,44 +355,88 @@ async function runClaudeInWorktree({
 		});
 	};
 
+	// Create terminal session for this task
+	taskTerminalBridge.createSession({
+		taskId,
+		workingDir: worktreePath,
+	});
+
+	// Track completion state
+	let completed = false;
+	let exitCode: number | undefined;
+	let exitError: string | undefined;
+
+	// Subscribe to terminal output
+	const handleData = (id: string, data: string) => {
+		if (id === taskId) {
+			emitOutput("output", data);
+		}
+	};
+
+	const handleExit = (id: string, code: number, signal?: number) => {
+		if (id === taskId) {
+			completed = true;
+			exitCode = code;
+			if (signal) {
+				exitError = `Process terminated by signal ${signal}`;
+			}
+		}
+	};
+
+	taskTerminalBridge.on("data", handleData);
+	taskTerminalBridge.on("exit", handleExit);
+
 	try {
 		emitOutput("progress", `Starting Claude in ${worktreePath}...`);
 		emitOutput("progress", `Prompt: ${prompt}`);
 
-		// Run Claude CLI in the worktree directory
-		// Using --print mode for now - will switch to full streaming later
-		const claudeProcess = execa("claude", ["-p", prompt], {
-			cwd: worktreePath,
-			signal: abortSignal,
-			timeout: 10 * 60 * 1000, // 10 minute timeout
-			reject: false, // Don't throw on non-zero exit
+		// Escape single quotes in prompt for shell command
+		const escapedPrompt = prompt.replace(/'/g, "'\\''");
+
+		// Run Claude CLI in the terminal
+		// Using -p flag for non-interactive mode with prompt
+		const claudeCommand = `claude -p '${escapedPrompt}'\n`;
+		taskTerminalBridge.write(taskId, claudeCommand);
+
+		// Wait for completion or cancellation
+		await new Promise<void>((resolve, reject) => {
+			const checkInterval = setInterval(() => {
+				if (abortSignal.aborted) {
+					clearInterval(checkInterval);
+					// Kill the terminal session
+					taskTerminalBridge.killSession(taskId);
+					emitOutput("progress", "Task was cancelled");
+					resolve();
+					return;
+				}
+
+				if (completed) {
+					clearInterval(checkInterval);
+					if (exitCode !== 0 || exitError) {
+						reject(
+							new Error(
+								exitError || `Claude exited with code ${exitCode}`,
+							),
+						);
+					} else {
+						resolve();
+					}
+				}
+			}, 100);
+
+			// Timeout after 10 minutes
+			setTimeout(() => {
+				if (!completed && !abortSignal.aborted) {
+					clearInterval(checkInterval);
+					taskTerminalBridge.killSession(taskId);
+					reject(new Error("Task timed out after 10 minutes"));
+				}
+			}, 10 * 60 * 1000);
 		});
 
-		// Stream stdout
-		claudeProcess.stdout?.on("data", (data: Buffer) => {
-			const text = data.toString();
-			emitOutput("output", text);
-		});
-
-		// Stream stderr
-		claudeProcess.stderr?.on("data", (data: Buffer) => {
-			const text = data.toString();
-			emitOutput("error", text);
-		});
-
-		const result = await claudeProcess;
-
-		if (abortSignal.aborted) {
-			emitOutput("progress", "Task was cancelled");
-			return;
+		if (!abortSignal.aborted) {
+			emitOutput("progress", "Claude completed successfully");
 		}
-
-		if (result.exitCode !== 0) {
-			const errorMsg = result.stderr || result.stdout || "Unknown error";
-			throw new Error(`Claude exited with code ${result.exitCode}: ${errorMsg}`);
-		}
-
-		emitOutput("progress", "Claude completed successfully");
 	} catch (error) {
 		if (abortSignal.aborted) {
 			emitOutput("progress", "Task was cancelled");
@@ -380,7 +448,8 @@ async function runClaudeInWorktree({
 		// Check if Claude CLI is not installed
 		if (
 			errorMessage.includes("ENOENT") ||
-			errorMessage.includes("command not found")
+			errorMessage.includes("command not found") ||
+			errorMessage.includes("claude: not found")
 		) {
 			throw new Error(
 				"Claude CLI is not installed. Please install it with: npm install -g @anthropic-ai/claude-code",
@@ -388,6 +457,11 @@ async function runClaudeInWorktree({
 		}
 
 		throw error;
+	} finally {
+		// Clean up event listeners
+		taskTerminalBridge.off("data", handleData);
+		taskTerminalBridge.off("exit", handleExit);
+		// Note: Don't kill the session here - keep it alive for "attach" feature
 	}
 }
 

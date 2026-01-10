@@ -1,3 +1,7 @@
+import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 import { Button } from "@superset/ui/button";
 import {
 	Dialog,
@@ -29,16 +33,32 @@ import {
 	TooltipTrigger,
 } from "@superset/ui/tooltip";
 import { cn } from "@superset/ui/utils";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	LuArrowLeft,
+	LuBot,
+	LuCheck,
+	LuChevronRight,
+	LuCircle,
+	LuClock,
+	LuExternalLink,
 	LuGripVertical,
 	LuLoader,
+	LuMessageSquare,
+	LuPanelRightClose,
+	LuPanelRightOpen,
 	LuPause,
 	LuPlay,
 	LuPlus,
+	LuRefreshCw,
+	LuSend,
 	LuSquare,
+	LuTerminal,
 	LuTrash2,
+	LuUser,
+	LuWrench,
+	LuX,
+	LuCircleX,
 } from "react-icons/lu";
 import { trpc } from "renderer/lib/trpc";
 import { useClosePlan } from "renderer/stores/app-state";
@@ -77,6 +97,8 @@ const COLUMN_CONFIG: {
 export function PlanView() {
 	const closePlan = useClosePlan();
 	const [isCreateTaskOpen, setIsCreateTaskOpen] = useState(false);
+	const [isChatOpen, setIsChatOpen] = useState(true);
+	const [selectedTask, setSelectedTask] = useState<PlanTask | null>(null);
 
 	// Get active workspace to determine the project
 	const { data: activeWorkspace } = trpc.workspaces.getActive.useQuery();
@@ -130,6 +152,10 @@ export function PlanView() {
 		onSuccess: () => refetchTasks(),
 	});
 
+	const retryTaskMutation = trpc.plan.retry.useMutation({
+		onSuccess: () => refetchTasks(),
+	});
+
 	const handleCreateTask = useCallback(
 		(data: { title: string; description?: string; priority?: TaskPriority }) => {
 			if (!plan?.id) return;
@@ -171,6 +197,13 @@ export function PlanView() {
 		[stopTaskMutation],
 	);
 
+	const handleRetryTask = useCallback(
+		(taskId: string) => {
+			retryTaskMutation.mutate({ taskId });
+		},
+		[retryTaskMutation],
+	);
+
 	if (!activeWorkspace?.project) {
 		return (
 			<div className="flex flex-col h-full w-full bg-background items-center justify-center">
@@ -187,7 +220,7 @@ export function PlanView() {
 	return (
 		<div className="flex flex-col h-full w-full overflow-hidden bg-background">
 			{/* Header */}
-			<div className="flex-shrink-0 flex items-center justify-between border-b border-border px-4 py-3 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+			<div className="flex-shrink-0 flex items-center justify-between border-b border-border px-4 py-2.5 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
 				<div className="flex items-center gap-3">
 					<Button
 						variant="ghost"
@@ -198,49 +231,77 @@ export function PlanView() {
 						<LuArrowLeft className="size-4" />
 					</Button>
 					<div>
-						<h1 className="text-lg font-semibold">Plan</h1>
+						<h1 className="text-sm font-semibold">Plan</h1>
 						<p className="text-xs text-muted-foreground">
 							{activeWorkspace.project.name}
 						</p>
 					</div>
 				</div>
-				<div className="flex items-center gap-2">
+				<div className="flex items-center gap-1.5">
 					<Button
 						size="sm"
-						className="gap-2"
+						className="gap-1.5 h-8"
 						onClick={() => setIsCreateTaskOpen(true)}
 					>
-						<LuPlus className="size-4" />
+						<LuPlus className="size-3.5" />
 						Add Task
 					</Button>
+					<TooltipProvider>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="ghost"
+									size="icon"
+									onClick={() => setIsChatOpen(!isChatOpen)}
+									className="size-8"
+								>
+									{isChatOpen ? (
+										<LuPanelRightClose className="size-4" />
+									) : (
+										<LuPanelRightOpen className="size-4" />
+									)}
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">
+								{isChatOpen ? "Hide Orchestrator" : "Show Orchestrator"}
+							</TooltipContent>
+						</Tooltip>
+					</TooltipProvider>
 				</div>
 			</div>
 
 			{/* Main content area - split between kanban and chat */}
-			<div className="flex-1 min-h-0 overflow-hidden">
-				<ResizablePanelGroup direction="horizontal" className="h-full">
-					{/* Kanban Board Panel */}
-					<ResizablePanel defaultSize={70} minSize={30}>
-						<div className="h-full overflow-hidden">
-							<KanbanBoard
-								tasks={tasksData?.tasks ?? []}
-								onMoveTask={handleMoveTask}
-								onDeleteTask={handleDeleteTask}
-								onStartTask={handleStartTask}
-								onStopTask={handleStopTask}
-							/>
-						</div>
-					</ResizablePanel>
+			<div className="flex-1 min-h-0 overflow-hidden flex">
+				{/* Kanban Board */}
+				<div className="flex-1 h-full overflow-hidden">
+					<KanbanBoard
+						tasks={tasksData?.tasks ?? []}
+						onMoveTask={handleMoveTask}
+						onDeleteTask={handleDeleteTask}
+						onStartTask={handleStartTask}
+						onStopTask={handleStopTask}
+						onRetryTask={handleRetryTask}
+						onSelectTask={setSelectedTask}
+						selectedTaskId={selectedTask?.id}
+					/>
+				</div>
 
-					<ResizableHandle withHandle className="bg-border/50 hover:bg-border transition-colors" />
-
-					{/* Orchestration Chat Panel */}
-					<ResizablePanel defaultSize={30} minSize={15}>
-						<div className="h-full overflow-hidden bg-muted/20">
-							<ChatPlaceholder />
-						</div>
-					</ResizablePanel>
-				</ResizablePanelGroup>
+				{/* Orchestration Chat Panel - Collapsible */}
+				<div
+					className={cn(
+						"h-full border-l border-border/50 transition-all duration-200 ease-in-out overflow-hidden flex-shrink-0",
+						isChatOpen ? "w-80" : "w-0",
+					)}
+				>
+					<div className="h-full w-80">
+						<OrchestrationChat
+							projectId={projectId!}
+							planId={plan?.id ?? ""}
+							onTasksChanged={() => refetchTasks()}
+							onClose={() => setIsChatOpen(false)}
+						/>
+					</div>
+				</div>
 			</div>
 
 			{/* Create Task Dialog */}
@@ -249,6 +310,14 @@ export function PlanView() {
 				onOpenChange={setIsCreateTaskOpen}
 				onSubmit={handleCreateTask}
 				isLoading={createTaskMutation.isPending}
+			/>
+
+			{/* Task Detail Panel */}
+			<TaskDetailPanel
+				task={selectedTask}
+				onClose={() => setSelectedTask(null)}
+				onStartTask={handleStartTask}
+				onStopTask={handleStopTask}
 			/>
 		</div>
 	);
@@ -259,10 +328,13 @@ interface KanbanBoardProps {
 	onMoveTask: (taskId: string, status: PlanTaskStatus, columnOrder: number) => void;
 	onDeleteTask: (taskId: string) => void;
 	onStartTask: (taskId: string) => void;
+	onRetryTask: (taskId: string) => void;
 	onStopTask: (taskId: string) => void;
+	onSelectTask: (task: PlanTask) => void;
+	selectedTaskId?: string;
 }
 
-function KanbanBoard({ tasks, onMoveTask, onDeleteTask, onStartTask, onStopTask }: KanbanBoardProps) {
+function KanbanBoard({ tasks, onMoveTask, onDeleteTask, onStartTask, onStopTask, onRetryTask, onSelectTask, selectedTaskId }: KanbanBoardProps) {
 	// Group tasks by status
 	const groupedTasks: Record<PlanTaskStatus, PlanTask[]> = {
 		backlog: [],
@@ -296,6 +368,9 @@ function KanbanBoard({ tasks, onMoveTask, onDeleteTask, onStartTask, onStopTask 
 						onDeleteTask={onDeleteTask}
 						onStartTask={onStartTask}
 						onStopTask={onStopTask}
+						onRetryTask={onRetryTask}
+						onSelectTask={onSelectTask}
+						selectedTaskId={selectedTaskId}
 					/>
 				))}
 			</div>
@@ -312,6 +387,9 @@ interface KanbanColumnProps {
 	onDeleteTask: (taskId: string) => void;
 	onStartTask: (taskId: string) => void;
 	onStopTask: (taskId: string) => void;
+	onRetryTask: (taskId: string) => void;
+	onSelectTask: (task: PlanTask) => void;
+	selectedTaskId?: string;
 }
 
 function KanbanColumn({
@@ -321,8 +399,11 @@ function KanbanColumn({
 	tasks,
 	onMoveTask,
 	onDeleteTask,
+	onSelectTask,
+	selectedTaskId,
 	onStartTask,
 	onStopTask,
+	onRetryTask,
 }: KanbanColumnProps) {
 	const handleDragOver = (e: React.DragEvent) => {
 		e.preventDefault();
@@ -363,6 +444,9 @@ function KanbanColumn({
 							onDelete={() => onDeleteTask(task.id)}
 							onStart={() => onStartTask(task.id)}
 							onStop={() => onStopTask(task.id)}
+							onRetry={() => onRetryTask(task.id)}
+							onSelect={() => onSelectTask(task)}
+							isSelected={selectedTaskId === task.id}
 						/>
 					))
 				)}
@@ -376,9 +460,12 @@ interface TaskCardProps {
 	onDelete: () => void;
 	onStart: () => void;
 	onStop: () => void;
+	onRetry: () => void;
+	onSelect: () => void;
+	isSelected?: boolean;
 }
 
-function TaskCard({ task, onDelete, onStart, onStop }: TaskCardProps) {
+function TaskCard({ task, onDelete, onStart, onStop, onRetry, onSelect, isSelected }: TaskCardProps) {
 	const handleDragStart = (e: React.DragEvent) => {
 		e.dataTransfer.setData("text/plain", task.id);
 		e.dataTransfer.effectAllowed = "move";
@@ -394,7 +481,8 @@ function TaskCard({ task, onDelete, onStart, onStop }: TaskCardProps) {
 
 	const isRunning = task.status === "running";
 	const isQueued = task.status === "queued";
-	const canStart = task.status === "backlog" || task.status === "failed";
+	const isFailed = task.status === "failed";
+	const canStart = task.status === "backlog";
 	const canStop = isRunning || isQueued;
 
 	return (
@@ -402,7 +490,13 @@ function TaskCard({ task, onDelete, onStart, onStop }: TaskCardProps) {
 			<div
 				draggable
 				onDragStart={handleDragStart}
-				className="group bg-background border border-border/80 rounded-md p-2.5 cursor-grab active:cursor-grabbing hover:border-foreground/20 hover:shadow-sm transition-all"
+				onClick={onSelect}
+				className={cn(
+					"group bg-background border rounded-md p-2.5 cursor-pointer hover:border-foreground/20 hover:shadow-sm transition-all",
+					isSelected
+						? "border-primary ring-1 ring-primary/30"
+						: "border-border/80",
+				)}
 			>
 				<div className="flex items-start gap-1.5">
 					<LuGripVertical className="size-3.5 text-muted-foreground mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
@@ -461,6 +555,24 @@ function TaskCard({ task, onDelete, onStart, onStop }: TaskCardProps) {
 									</Button>
 								</TooltipTrigger>
 								<TooltipContent side="top" className="text-xs">Start</TooltipContent>
+							</Tooltip>
+						)}
+						{isFailed && (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										variant="ghost"
+										size="icon"
+										className="size-5 text-orange-500 hover:text-orange-600 hover:bg-orange-500/10"
+										onClick={(e) => {
+											e.stopPropagation();
+											onRetry();
+										}}
+									>
+										<LuRefreshCw className="size-2.5" />
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="top" className="text-xs">Retry</TooltipContent>
 							</Tooltip>
 						)}
 						{canStop && (
@@ -608,40 +720,740 @@ function CreateTaskDialog({
 	);
 }
 
-function ChatPlaceholder() {
+interface ChatMessage {
+	id: string;
+	role: "user" | "assistant" | "system";
+	content: string;
+	toolCalls?: Array<{
+		id: string;
+		name: string;
+		input: Record<string, unknown>;
+		result?: unknown;
+	}>;
+	createdAt: number;
+}
+
+interface OrchestrationChatProps {
+	projectId: string;
+	planId: string;
+	onTasksChanged?: () => void;
+	onClose?: () => void;
+}
+
+function OrchestrationChat({
+	projectId,
+	planId,
+	onTasksChanged,
+	onClose,
+}: OrchestrationChatProps) {
+	const [messages, setMessages] = useState<ChatMessage[]>([]);
+	const [input, setInput] = useState("");
+	const [isStreaming, setIsStreaming] = useState(false);
+	const [streamingContent, setStreamingContent] = useState("");
+	const [pendingToolCalls, setPendingToolCalls] = useState<
+		Array<{ id: string; name: string; input: Record<string, unknown> }>
+	>([]);
+	const messagesEndRef = useRef<HTMLDivElement>(null);
+	const inputRef = useRef<HTMLInputElement>(null);
+
+	// Fetch history on mount
+	const { data: historyData } = trpc.plan.orchestration.getHistory.useQuery(
+		{ projectId, limit: 50 },
+		{ enabled: !!projectId },
+	);
+
+	// Load history into state
+	useEffect(() => {
+		if (historyData?.messages) {
+			setMessages(historyData.messages as ChatMessage[]);
+		}
+	}, [historyData]);
+
+	// Subscribe to stream
+	trpc.plan.orchestration.subscribeToStream.useSubscription(
+		{ projectId },
+		{
+			enabled: !!projectId,
+			onData: (event) => {
+				switch (event.type) {
+					case "start":
+						setIsStreaming(true);
+						setStreamingContent("");
+						setPendingToolCalls([]);
+						break;
+					case "token":
+						setStreamingContent((prev) => prev + (event.data as string));
+						break;
+					case "tool_call": {
+						const toolCall = event.data as {
+							id: string;
+							name: string;
+							input: Record<string, unknown>;
+						};
+						setPendingToolCalls((prev) => [...prev, toolCall]);
+						break;
+					}
+					case "tool_result": {
+						const resultData = event.data as {
+							callId: string;
+							result: unknown;
+						};
+						setPendingToolCalls((prev) =>
+							prev.map((tc) =>
+								tc.id === resultData.callId
+									? { ...tc, result: resultData.result }
+									: tc,
+							) as Array<{
+								id: string;
+								name: string;
+								input: Record<string, unknown>;
+							}>,
+						);
+						// Refresh tasks when a tool completes
+						onTasksChanged?.();
+						break;
+					}
+					case "complete": {
+						const message = event.data as ChatMessage;
+						setMessages((prev) => [...prev, message]);
+						setIsStreaming(false);
+						setStreamingContent("");
+						setPendingToolCalls([]);
+						break;
+					}
+					case "error":
+						setIsStreaming(false);
+						setStreamingContent("");
+						setPendingToolCalls([]);
+						console.error("[orchestration] Error:", event.data);
+						break;
+				}
+			},
+		},
+	);
+
+	const sendMessageMutation = trpc.plan.orchestration.sendMessage.useMutation({
+		onMutate: () => {
+			// Optimistically add user message
+			const userMessage: ChatMessage = {
+				id: `temp-${Date.now()}`,
+				role: "user",
+				content: input,
+				createdAt: Date.now(),
+			};
+			setMessages((prev) => [...prev, userMessage]);
+			setInput("");
+		},
+	});
+
+	const handleSubmit = useCallback(
+		(e: React.FormEvent) => {
+			e.preventDefault();
+			if (!input.trim() || isStreaming || !planId) return;
+			sendMessageMutation.mutate({ projectId, planId, content: input.trim() });
+		},
+		[input, isStreaming, planId, projectId, sendMessageMutation],
+	);
+
+	const handleKeyDown = useCallback(
+		(e: React.KeyboardEvent) => {
+			if (e.key === "Enter" && !e.shiftKey) {
+				e.preventDefault();
+				handleSubmit(e);
+			}
+		},
+		[handleSubmit],
+	);
+
+	// Auto-scroll to bottom
+	useEffect(() => {
+		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+	}, [messages, streamingContent]);
+
+	const isEmpty = messages.length === 0 && !isStreaming;
+
 	return (
-		<div className="flex flex-col h-full overflow-hidden">
+		<div className="flex flex-col h-full overflow-hidden bg-background">
 			{/* Chat header */}
-			<div className="flex-shrink-0 flex items-center px-3 py-2.5 border-b border-border/50">
-				<h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Orchestrator</h2>
+			<div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-b border-border">
+				<div className="flex items-center gap-1.5">
+					<LuMessageSquare className="size-3.5 text-muted-foreground" />
+					<h2 className="text-xs font-medium">Orchestrator</h2>
+				</div>
+				<div className="flex items-center gap-1">
+					{isStreaming && (
+						<LuLoader className="size-3 text-primary animate-spin" />
+					)}
+					{onClose && (
+						<Button
+							variant="ghost"
+							size="icon"
+							onClick={onClose}
+							className="size-6 text-muted-foreground hover:text-foreground"
+						>
+							<LuX className="size-3.5" />
+						</Button>
+					)}
+				</div>
 			</div>
 
 			{/* Chat messages */}
-			<div className="flex-1 overflow-y-auto p-3 min-h-0">
-				<div className="flex items-center justify-center h-full text-muted-foreground">
-					<div className="text-center space-y-1.5 px-2">
-						<p className="text-xs">Start a conversation to orchestrate your tasks.</p>
-						<p className="text-[11px] text-muted-foreground/70">
-							Create, modify, and run tasks with AI.
-						</p>
+			<div className="flex-1 overflow-y-auto p-3 min-h-0 space-y-3">
+				{isEmpty ? (
+					<div className="flex items-center justify-center h-full text-muted-foreground">
+						<div className="text-center space-y-2 px-4">
+							<div className="mx-auto size-10 rounded-full bg-muted/50 flex items-center justify-center">
+								<LuBot className="size-5 text-muted-foreground" />
+							</div>
+							<div className="space-y-1">
+								<p className="text-xs font-medium text-foreground">
+									AI Orchestrator
+								</p>
+								<p className="text-[11px] text-muted-foreground leading-relaxed">
+									Create, modify, and run tasks<br />through conversation.
+								</p>
+							</div>
+						</div>
 					</div>
-				</div>
+				) : (
+					<>
+						{messages.map((msg) => (
+							<ChatMessageBubble key={msg.id} message={msg} />
+						))}
+						{/* Streaming message */}
+						{isStreaming && (streamingContent || pendingToolCalls.length > 0) && (
+							<div className="flex gap-2">
+								<div className="flex-shrink-0 size-6 rounded-full bg-primary/10 flex items-center justify-center">
+									<LuBot className="size-3.5 text-primary" />
+								</div>
+								<div className="flex-1 min-w-0 space-y-2">
+									{streamingContent && (
+										<div className="text-xs text-foreground whitespace-pre-wrap">
+											{streamingContent}
+											<span className="inline-block w-1.5 h-3.5 bg-primary/60 animate-pulse ml-0.5" />
+										</div>
+									)}
+									{pendingToolCalls.map((tc) => (
+										<ToolCallBubble key={tc.id} toolCall={tc} />
+									))}
+								</div>
+							</div>
+						)}
+						<div ref={messagesEndRef} />
+					</>
+				)}
 			</div>
 
 			{/* Chat input */}
-			<div className="flex-shrink-0 border-t border-border/50 p-2">
+			<form
+				onSubmit={handleSubmit}
+				className="flex-shrink-0 border-t border-border p-2"
+			>
 				<div className="flex gap-1.5">
 					<Input
+						ref={inputRef}
 						type="text"
-						placeholder="Ask the orchestrator..."
-						className="flex-1 h-8 text-xs"
-						disabled
+						value={input}
+						onChange={(e) => setInput(e.target.value)}
+						onKeyDown={handleKeyDown}
+						placeholder="Message..."
+						className="flex-1 h-8 text-xs bg-muted/30 border-border/50 focus-visible:ring-1"
+						disabled={isStreaming || !planId}
 					/>
-					<Button size="sm" className="h-8 px-3 flex-shrink-0" disabled>
-						Send
+					<Button
+						type="submit"
+						size="icon"
+						variant={input.trim() ? "default" : "ghost"}
+						className="size-8 flex-shrink-0"
+						disabled={isStreaming || !input.trim() || !planId}
+					>
+						{isStreaming ? (
+							<LuLoader className="size-3.5 animate-spin" />
+						) : (
+							<LuSend className="size-3.5" />
+						)}
 					</Button>
 				</div>
+			</form>
+		</div>
+	);
+}
+
+interface ChatMessageBubbleProps {
+	message: ChatMessage;
+}
+
+function ChatMessageBubble({ message }: ChatMessageBubbleProps) {
+	const isUser = message.role === "user";
+
+	return (
+		<div className={cn("flex gap-2", isUser && "flex-row-reverse")}>
+			<div
+				className={cn(
+					"flex-shrink-0 size-5 rounded-full flex items-center justify-center mt-0.5",
+					isUser ? "bg-primary" : "bg-muted",
+				)}
+			>
+				{isUser ? (
+					<LuUser className="size-3 text-primary-foreground" />
+				) : (
+					<LuBot className="size-3 text-muted-foreground" />
+				)}
+			</div>
+			<div className={cn("flex-1 min-w-0 space-y-1.5", isUser && "text-right")}>
+				{message.content && (
+					<div
+						className={cn(
+							"inline-block text-xs whitespace-pre-wrap rounded-lg px-2.5 py-1.5 max-w-full leading-relaxed",
+							isUser
+								? "bg-primary text-primary-foreground"
+								: "text-foreground",
+						)}
+					>
+						{message.content}
+					</div>
+				)}
+				{/* Tool calls */}
+				{message.toolCalls && message.toolCalls.length > 0 && (
+					<div className="space-y-1">
+						{message.toolCalls.map((tc) => (
+							<ToolCallBubble key={tc.id} toolCall={tc} />
+						))}
+					</div>
+				)}
 			</div>
 		</div>
+	);
+}
+
+interface ToolCallBubbleProps {
+	toolCall: {
+		id: string;
+		name: string;
+		input: Record<string, unknown>;
+		result?: unknown;
+	};
+}
+
+function ToolCallBubble({ toolCall }: ToolCallBubbleProps) {
+	const [isExpanded, setIsExpanded] = useState(false);
+	const hasResult = toolCall.result !== undefined;
+
+	const toolNames: Record<string, string> = {
+		createTask: "Create Task",
+		modifyTask: "Modify Task",
+		startTask: "Start Task",
+		stopTask: "Stop Task",
+		listTasks: "List Tasks",
+		getTaskOutput: "Get Output",
+		setMemory: "Save Memory",
+		getMemory: "Read Memory",
+		getExecutionStats: "Get Stats",
+	};
+
+	return (
+		<div className="bg-muted/30 border border-border/50 rounded-md overflow-hidden text-left">
+			<button
+				type="button"
+				className="w-full flex items-center gap-1.5 px-2 py-1.5 hover:bg-muted/50 transition-colors"
+				onClick={() => setIsExpanded(!isExpanded)}
+			>
+				<LuWrench className="size-3 text-muted-foreground flex-shrink-0" />
+				<span className="text-[11px] font-medium flex-1 text-left truncate">
+					{toolNames[toolCall.name] ?? toolCall.name}
+				</span>
+				{hasResult ? (
+					<LuCheck className="size-3 text-green-500 flex-shrink-0" />
+				) : (
+					<LuLoader className="size-3 text-blue-500 animate-spin flex-shrink-0" />
+				)}
+				<LuChevronRight
+					className={cn(
+						"size-3 text-muted-foreground transition-transform flex-shrink-0",
+						isExpanded && "rotate-90",
+					)}
+				/>
+			</button>
+			{isExpanded && (
+				<div className="px-2 pb-2 text-[10px] text-muted-foreground space-y-1">
+					<div>
+						<span className="font-medium">Input:</span>
+						<pre className="mt-0.5 text-[10px] bg-background/50 rounded px-1.5 py-1 overflow-x-auto">
+							{JSON.stringify(toolCall.input, null, 2)}
+						</pre>
+					</div>
+					{hasResult && (
+						<div>
+							<span className="font-medium">Result:</span>
+							<pre className="mt-0.5 text-[10px] bg-background/50 rounded px-1.5 py-1 overflow-x-auto">
+								{JSON.stringify(toolCall.result, null, 2)}
+							</pre>
+						</div>
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
+// ============================================================================
+// Task Detail Panel - Slide-over for viewing task details and execution output
+// ============================================================================
+
+interface TaskDetailPanelProps {
+	task: PlanTask | null;
+	onClose: () => void;
+	onStartTask: (taskId: string) => void;
+	onStopTask: (taskId: string) => void;
+}
+
+function TaskDetailPanel({
+	task,
+	onClose,
+	onStartTask,
+	onStopTask,
+}: TaskDetailPanelProps) {
+	const setActiveWorkspaceMutation = trpc.workspaces.setActive.useMutation();
+
+	// Get execution status
+	const { data: executionStatus } = trpc.plan.getStatus.useQuery(
+		{ taskId: task?.id! },
+		{ enabled: !!task?.id, refetchInterval: 1000 },
+	);
+
+	const handleJumpToWorkspace = useCallback(() => {
+		if (executionStatus?.workspaceId) {
+			setActiveWorkspaceMutation.mutate({ id: executionStatus.workspaceId });
+			onClose();
+		}
+	}, [executionStatus?.workspaceId, setActiveWorkspaceMutation, onClose]);
+
+	if (!task) return null;
+
+	const isRunning = task.status === "running";
+	const isQueued = task.status === "queued";
+	const canStart = task.status === "backlog" || task.status === "failed";
+	const canStop = isRunning || isQueued;
+	const hasWorkspace = !!executionStatus?.workspaceId;
+
+	const statusColors: Record<string, string> = {
+		backlog: "text-muted-foreground",
+		queued: "text-yellow-500",
+		running: "text-blue-500",
+		completed: "text-green-500",
+		failed: "text-red-500",
+	};
+
+	const priorityLabels: Record<string, string> = {
+		urgent: "Urgent",
+		high: "High",
+		medium: "Medium",
+		low: "Low",
+		none: "None",
+	};
+
+	return (
+		<>
+			{/* Backdrop */}
+			<div
+				className="fixed inset-0 bg-black/20 z-40"
+				onClick={onClose}
+			/>
+
+			{/* Panel */}
+			<div className="fixed right-0 top-0 bottom-0 w-[600px] bg-background border-l border-border z-50 flex flex-col shadow-xl">
+				{/* Header */}
+				<div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-border">
+					<div className="flex items-center gap-2">
+						<LuTerminal className="size-4 text-muted-foreground" />
+						<h2 className="text-sm font-semibold">Task Details</h2>
+					</div>
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={onClose}
+						className="size-7"
+					>
+						<LuX className="size-4" />
+					</Button>
+				</div>
+
+				{/* Task Info */}
+				<div className="flex-shrink-0 p-4 border-b border-border space-y-3">
+					<div>
+						<h3 className="text-base font-medium">{task.title}</h3>
+						{task.description && (
+							<p className="text-sm text-muted-foreground mt-1">
+								{task.description}
+							</p>
+						)}
+					</div>
+
+					<div className="flex items-center gap-4 text-sm">
+						<div className="flex items-center gap-1.5">
+							<LuCircle className={cn("size-3", statusColors[task.status])} />
+							<span className="capitalize">{task.status}</span>
+						</div>
+						{task.priority && (
+							<div className="flex items-center gap-1.5 text-muted-foreground">
+								<span>Priority:</span>
+								<span>{priorityLabels[task.priority] ?? task.priority}</span>
+							</div>
+						)}
+						{executionStatus?.startedAt && (
+							<div className="flex items-center gap-1.5 text-muted-foreground">
+								<LuClock className="size-3" />
+								<span>
+									Started{" "}
+									{new Date(executionStatus.startedAt).toLocaleTimeString()}
+								</span>
+							</div>
+						)}
+					</div>
+
+					{/* Action Buttons */}
+					<div className="flex items-center gap-2">
+						{canStart && (
+							<Button
+								size="sm"
+								variant="default"
+								onClick={() => onStartTask(task.id)}
+								className="gap-1.5"
+							>
+								<LuPlay className="size-3" />
+								Start Task
+							</Button>
+						)}
+						{canStop && (
+							<Button
+								size="sm"
+								variant="destructive"
+								onClick={() => onStopTask(task.id)}
+								className="gap-1.5"
+							>
+								<LuSquare className="size-3" />
+								Stop
+							</Button>
+						)}
+						{hasWorkspace && (
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={handleJumpToWorkspace}
+								className="gap-1.5"
+							>
+								<LuExternalLink className="size-3" />
+								Jump to Workspace
+							</Button>
+						)}
+						{task.externalUrl && (
+							<Button
+								size="sm"
+								variant="ghost"
+								asChild
+							>
+								<a
+									href={task.externalUrl}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="gap-1.5"
+								>
+									<LuExternalLink className="size-3" />
+									View in Linear
+								</a>
+							</Button>
+						)}
+					</div>
+				</div>
+
+				{/* Execution Status */}
+				{executionStatus && (
+					<div className="flex-shrink-0 px-4 py-2 border-b border-border bg-muted/30">
+						<div className="flex items-center gap-2 text-sm">
+							{executionStatus.status === "running" && (
+								<LuLoader className="size-3.5 text-blue-500 animate-spin" />
+							)}
+							{executionStatus.status === "completed" && (
+								<LuCheck className="size-3.5 text-green-500" />
+							)}
+							{executionStatus.status === "failed" && (
+								<LuCircleX className="size-3.5 text-red-500" />
+							)}
+							<span className="text-muted-foreground">
+								{executionStatus.message}
+							</span>
+						</div>
+						{executionStatus.error && (
+							<p className="text-xs text-red-500 mt-1">
+								{executionStatus.error}
+							</p>
+						)}
+					</div>
+				)}
+
+				{/* Terminal Output */}
+				<div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+					<div className="flex-shrink-0 px-4 py-2 border-b border-border bg-muted/20">
+						<div className="flex items-center gap-2">
+							<LuTerminal className="size-3.5 text-muted-foreground" />
+							<span className="text-xs font-medium">Terminal</span>
+							{isRunning && (
+								<span className="text-[10px] text-blue-500 bg-blue-500/10 px-1.5 py-0.5 rounded">
+									LIVE
+								</span>
+							)}
+						</div>
+					</div>
+
+					<div className="flex-1 min-h-0">
+						<TaskTerminal
+							taskId={task.id}
+							isActive={isRunning || isQueued}
+						/>
+					</div>
+				</div>
+			</div>
+		</>
+	);
+}
+
+// ============================================================================
+// Task Terminal - xterm.js component for task execution output
+// ============================================================================
+
+interface TaskTerminalProps {
+	taskId: string;
+	isActive: boolean;
+}
+
+function TaskTerminal({ taskId, isActive }: TaskTerminalProps) {
+	const terminalRef = useRef<HTMLDivElement>(null);
+	const xtermRef = useRef<Terminal | null>(null);
+	const fitAddonRef = useRef<FitAddon | null>(null);
+	const [isAttached, setIsAttached] = useState(false);
+
+	// Attach to terminal and get scrollback
+	const { data: attachData } = trpc.plan.attachTerminal.useQuery(
+		{ taskId },
+		{ enabled: !!taskId },
+	);
+
+	// Write to terminal mutation
+	const writeToTerminalMutation = trpc.plan.writeToTerminal.useMutation();
+
+	// Resize terminal mutation
+	const resizeTerminalMutation = trpc.plan.resizeTerminal.useMutation();
+
+	// Initialize xterm
+	useEffect(() => {
+		if (!terminalRef.current) return;
+
+		const terminal = new Terminal({
+			cursorBlink: true,
+			fontSize: 13,
+			fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+			theme: {
+				background: "#0d1117",
+				foreground: "#c9d1d9",
+				cursor: "#58a6ff",
+				cursorAccent: "#0d1117",
+				selectionBackground: "#264f78",
+				black: "#0d1117",
+				red: "#ff7b72",
+				green: "#3fb950",
+				yellow: "#d29922",
+				blue: "#58a6ff",
+				magenta: "#bc8cff",
+				cyan: "#39c5cf",
+				white: "#b1bac4",
+				brightBlack: "#6e7681",
+				brightRed: "#ffa198",
+				brightGreen: "#56d364",
+				brightYellow: "#e3b341",
+				brightBlue: "#79c0ff",
+				brightMagenta: "#d2a8ff",
+				brightCyan: "#56d4dd",
+				brightWhite: "#f0f6fc",
+			},
+			scrollback: 10000,
+			allowProposedApi: true,
+		});
+
+		const fitAddon = new FitAddon();
+		const webLinksAddon = new WebLinksAddon();
+
+		terminal.loadAddon(fitAddon);
+		terminal.loadAddon(webLinksAddon);
+
+		terminal.open(terminalRef.current);
+		fitAddon.fit();
+
+		xtermRef.current = terminal;
+		fitAddonRef.current = fitAddon;
+
+		// Handle user input
+		terminal.onData((data) => {
+			writeToTerminalMutation.mutate({ taskId, data });
+		});
+
+		// Handle resize
+		const handleResize = () => {
+			fitAddon.fit();
+			const dims = fitAddon.proposeDimensions();
+			if (dims) {
+				resizeTerminalMutation.mutate({
+					taskId,
+					cols: dims.cols,
+					rows: dims.rows,
+				});
+			}
+		};
+
+		const resizeObserver = new ResizeObserver(handleResize);
+		resizeObserver.observe(terminalRef.current);
+
+		return () => {
+			resizeObserver.disconnect();
+			terminal.dispose();
+			xtermRef.current = null;
+			fitAddonRef.current = null;
+		};
+	}, [taskId]);
+
+	// Write scrollback when attachment data is received
+	useEffect(() => {
+		if (attachData?.exists && attachData.scrollback && xtermRef.current && !isAttached) {
+			xtermRef.current.write(attachData.scrollback);
+			setIsAttached(true);
+		}
+	}, [attachData, isAttached]);
+
+	// Reset attached state when taskId changes
+	useEffect(() => {
+		setIsAttached(false);
+		if (xtermRef.current) {
+			xtermRef.current.clear();
+		}
+	}, [taskId]);
+
+	// Subscribe to terminal output
+	trpc.plan.subscribeTerminal.useSubscription(
+		{ taskId },
+		{
+			enabled: !!taskId && isAttached,
+			onData: (event) => {
+				if (xtermRef.current) {
+					xtermRef.current.write(event.data);
+				}
+			},
+		},
+	);
+
+	return (
+		<div
+			ref={terminalRef}
+			className="w-full h-full bg-[#0d1117]"
+			style={{ padding: "8px" }}
+		/>
 	);
 }

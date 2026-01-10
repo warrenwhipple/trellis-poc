@@ -7,6 +7,7 @@ import {
 	type TaskExecutionOutput,
 	type TaskExecutionProgress,
 } from "main/lib/task-execution";
+import { taskTerminalBridge } from "main/lib/task-execution/terminal-bridge";
 import { z } from "zod";
 import { publicProcedure, router } from "../../..";
 
@@ -89,6 +90,70 @@ export const createExecutionProcedures = () => {
 					})
 					.where(eq(planTasks.id, input.taskId))
 					.run();
+
+				return { success: true };
+			}),
+
+		/**
+		 * Retry a failed task - clears error and re-queues for execution
+		 */
+		retry: publicProcedure
+			.input(z.object({ taskId: z.string() }))
+			.mutation(({ input }) => {
+				const task = localDb
+					.select()
+					.from(planTasks)
+					.where(eq(planTasks.id, input.taskId))
+					.get();
+
+				if (!task) {
+					throw new Error(`Task ${input.taskId} not found`);
+				}
+
+				if (task.status !== "failed") {
+					throw new Error(`Task is not failed, cannot retry`);
+				}
+
+				// Get the plan to find the project ID
+				const planRecord = localDb
+					.select()
+					.from(plans)
+					.where(eq(plans.id, task.planId))
+					.get();
+
+				if (!planRecord) {
+					throw new Error(`Plan ${task.planId} not found`);
+				}
+
+				// Get the project for the main repo path
+				const projectRecord = localDb
+					.select()
+					.from(projects)
+					.where(eq(projects.id, planRecord.projectId))
+					.get();
+
+				if (!projectRecord?.mainRepoPath) {
+					throw new Error("Project main repo path not found");
+				}
+
+				// Clear error and reset status
+				localDb
+					.update(planTasks)
+					.set({
+						status: "queued",
+						executionStatus: "pending",
+						executionError: null,
+						updatedAt: Date.now(),
+					})
+					.where(eq(planTasks.id, input.taskId))
+					.run();
+
+				// Re-enqueue the task
+				taskExecutionManager.enqueue(
+					task,
+					planRecord.projectId,
+					projectRecord.mainRepoPath,
+				);
 
 				return { success: true };
 			}),
@@ -198,5 +263,124 @@ export const createExecutionProcedures = () => {
 				};
 			});
 		}),
+
+		// ================== Terminal Procedures ==================
+
+		/**
+		 * Attach to a task's terminal session
+		 * Returns scrollback buffer and whether the terminal is still alive
+		 */
+		attachTerminal: publicProcedure
+			.input(z.object({ taskId: z.string() }))
+			.query(({ input }) => {
+				const result = taskTerminalBridge.attach(input.taskId);
+				if (!result) {
+					return {
+						exists: false,
+						scrollback: "",
+						isAlive: false,
+					};
+				}
+				return {
+					exists: true,
+					scrollback: result.scrollback,
+					isAlive: result.isAlive,
+				};
+			}),
+
+		/**
+		 * Write data to a task's terminal (user input)
+		 */
+		writeToTerminal: publicProcedure
+			.input(z.object({ taskId: z.string(), data: z.string() }))
+			.mutation(({ input }) => {
+				const success = taskTerminalBridge.write(input.taskId, input.data);
+				return { success };
+			}),
+
+		/**
+		 * Resize a task's terminal
+		 */
+		resizeTerminal: publicProcedure
+			.input(
+				z.object({
+					taskId: z.string(),
+					cols: z.number().min(1),
+					rows: z.number().min(1),
+				}),
+			)
+			.mutation(({ input }) => {
+				const success = taskTerminalBridge.resize(
+					input.taskId,
+					input.cols,
+					input.rows,
+				);
+				return { success };
+			}),
+
+		/**
+		 * Check if a terminal session is alive
+		 */
+		isTerminalAlive: publicProcedure
+			.input(z.object({ taskId: z.string() }))
+			.query(({ input }) => {
+				return { alive: taskTerminalBridge.isAlive(input.taskId) };
+			}),
+
+		/**
+		 * Get all active terminal sessions
+		 */
+		getActiveTerminals: publicProcedure.query(() => {
+			return { taskIds: taskTerminalBridge.getActiveSessions() };
+		}),
+
+		/**
+		 * Subscribe to raw terminal output for xterm rendering
+		 * This provides ANSI escape sequences for proper terminal display
+		 */
+		subscribeTerminal: publicProcedure
+			.input(z.object({ taskId: z.string() }))
+			.subscription(({ input }) => {
+				return observable<{ data: string }>((emit) => {
+					const handleData = (taskId: string, data: string) => {
+						if (taskId === input.taskId) {
+							emit.next({ data });
+						}
+					};
+
+					const handleExit = (
+						taskId: string,
+						exitCode: number,
+						signal?: number,
+					) => {
+						if (taskId === input.taskId) {
+							// Emit exit message to terminal
+							const exitMsg = signal
+								? `\r\n[Process terminated by signal ${signal}]\r\n`
+								: `\r\n[Process exited with code ${exitCode}]\r\n`;
+							emit.next({ data: exitMsg });
+							emit.complete();
+						}
+					};
+
+					taskTerminalBridge.on("data", handleData);
+					taskTerminalBridge.on("exit", handleExit);
+
+					return () => {
+						taskTerminalBridge.off("data", handleData);
+						taskTerminalBridge.off("exit", handleExit);
+					};
+				});
+			}),
+
+		/**
+		 * Kill a terminal session
+		 */
+		killTerminal: publicProcedure
+			.input(z.object({ taskId: z.string() }))
+			.mutation(({ input }) => {
+				taskTerminalBridge.killSession(input.taskId);
+				return { success: true };
+			}),
 	});
 };

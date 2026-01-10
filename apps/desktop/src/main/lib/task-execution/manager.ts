@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import type { SelectPlanTask } from "@superset/local-db";
+import { executionLogs, type SelectPlanTask } from "@superset/local-db";
+import { localDb } from "main/lib/local-db";
 
 export type TaskExecutionStatus =
 	| "pending"
@@ -255,11 +256,28 @@ class TaskExecutionManager extends EventEmitter {
 	}
 
 	/**
-	 * Emit output from task execution
+	 * Emit output from task execution and persist to database
 	 */
 	emitOutput(output: TaskExecutionOutput): void {
+		// Emit for live streaming
 		this.emit("output", output);
 		this.emit(`output:${output.taskId}`, output);
+
+		// Persist to database for history
+		try {
+			localDb
+				.insert(executionLogs)
+				.values({
+					taskId: output.taskId,
+					type: output.type,
+					content: output.content,
+					timestamp: output.timestamp,
+				})
+				.run();
+		} catch (error) {
+			// Don't fail execution if log persistence fails
+			console.error("[task-execution] Failed to persist log:", error);
+		}
 	}
 
 	/**
