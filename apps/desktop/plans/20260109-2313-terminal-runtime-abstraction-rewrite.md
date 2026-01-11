@@ -24,14 +24,14 @@ Reference: This plan follows conventions from `AGENTS.md`, `apps/desktop/AGENTS.
   - [Diagrams (Call Flow)](#diagrams-call-flow)
 - [Milestones](#milestone-1-establish-a-backend-contract-and-invariants)
   - [Milestone 1](#milestone-1-establish-a-backend-contract-and-invariants)
-  - [Milestone 2](#milestone-2-implement-terminalruntime-facade--capabilities)
+  - [Milestone 2](#milestone-2-implement-terminalruntime-registry--capabilities)
   - [Milestone 3](#milestone-3-migrate-trpc-terminal-router-to-the-runtime)
   - [Milestone 4](#milestone-4-add-regression-coverage-for-the-abstraction-boundary)
   - [Milestone 5](#milestone-5-manual-verification-high-coverage-low-surprises)
   - [Milestone 6a](#milestone-6a-build-a-terminal-init-plan-renderer)
   - [Milestone 6b](#milestone-6b-stream-subscription--buffering-hook-renderer)
   - [Milestone 6c](#milestone-6c-integrate-helpers-into-terminaltsx-ui-wiring-only)
-  - [Milestone 7 (Optional)](#milestone-7-optional--cloud-readiness-introduce-backendsessionid)
+  - [Milestone 7 (Cloud Readiness)](#milestone-7-cloud-readiness-introduce-backendsessionid)
 - [Validation](#validation)
 - [Idempotence / Safety](#idempotence--safety)
 - [Risks and Mitigations](#risks-and-mitigations)
@@ -43,11 +43,13 @@ Reference: This plan follows conventions from `AGENTS.md`, `apps/desktop/AGENTS.
 
 ## Purpose / Big Picture
 
-After this change, the desktop app still supports terminal persistence (daemon mode with cold restore) exactly as it does today, but the codebase no longer leaks “daemon vs in-process” branching across the tRPC router and UI. The backend selection becomes a single responsibility owned by `apps/desktop/src/main/lib/terminal/`, making the feature easier to review, less fragile, and a better foundation for future “cloud terminal” backends.
+After this change, the desktop app still supports terminal persistence (daemon mode with cold restore) exactly as it does today, but the codebase no longer leaks “daemon vs in-process” branching across the tRPC router and UI. Backend selection becomes a single responsibility owned by `apps/desktop/src/main/lib/terminal/`.
+
+This plan also tightens the abstraction so it can become the **local implementation of a workspace-scoped “provider”** later (cloud/SSH/remote runners), without re-introducing backend branching across the application.
 
 Observable outcomes:
 
-1. With terminal persistence disabled, terminals behave as before (no persistence across app restarts), and Settings → Terminal “Manage sessions” shows that daemon management is unavailable.
+1. With terminal persistence disabled, terminals behave as before (no persistence across app restarts), and Settings → Terminal “Manage sessions” shows that session management is unavailable.
 2. With terminal persistence enabled, terminals survive app restarts, cold restore works, and Settings → Terminal “Manage sessions” continues to list/kill sessions.
 3. The tRPC `terminal.*` router no longer needs `instanceof DaemonTerminalManager` checks; daemon awareness is centralized in the terminal runtime layer.
 4. The renderer terminal component remains correct but is easier to reason about because backend-agnostic “session initialization” and “stream event handling” logic is extracted into small, testable helpers rather than being interleaved with UI rendering.
@@ -88,9 +90,13 @@ Warm attach: reconnecting to a still-running session (daemon still has the PTY).
 
 Cold restore: restoring scrollback from disk after an unclean shutdown or daemon session loss, before starting a new shell.
 
-Terminal runtime: a single module-level API in `apps/desktop/src/main/lib/terminal/` that selects the active terminal backend (daemon or in-process) and exposes a unified surface to callers.
+Terminal runtime: a backend-agnostic surface (sessions/workspaces/events + capabilities) that callers use without knowing the implementation (local in-process, local daemon, cloud/SSH later).
 
-Capabilities: optional features that exist only for some backends (for example “list/manage persistent sessions”). Callers should not use `instanceof` checks. Capability presence must be represented structurally (for example `daemon: null` when unavailable) and via explicit capability flags, so “unsupported” cannot be confused with “success”.
+Terminal runtime registry: a process-scoped module in `apps/desktop/src/main/lib/terminal/` that selects the correct runtime for a given workspace/session and ensures runtimes are cached so we don’t multiply event listeners or backend connections.
+
+Capabilities: optional features that exist only for some backends (for example “list/manage persistent sessions”). Callers should not use `instanceof` checks. Capability presence must be represented structurally (for example `management: null` when unavailable) and via explicit capability flags, so “unsupported” cannot be confused with “success”.
+
+Workspace provider / runtime: a workspace-scoped backend boundary that can supply terminal IO, agent lifecycle events, and “changes/files” operations for either local worktrees or cloud workspaces. This plan focuses on the terminal portion, but the boundary should be compatible with being embedded in a provider later.
 
 
 ## Non-Goals
@@ -114,6 +120,15 @@ This refactor is intentionally conservative to avoid regressions:
 
 This plan intentionally does not implement cloud terminals, but the abstraction boundary should be compatible with adding a backend that runs terminal sessions inside a remote “runner” (a background agent on a server) while preserving Superset Desktop concepts like worktrees, “changes” (diff/status), and agent lifecycle indicators.
 
+### Direction for this rewrite (so we don’t paint ourselves into a corner)
+
+The cloud workspace plan (`docs/CLOUD_WORKSPACE_PLAN.md`) makes a few things explicit: multi-device access, cloud as source-of-truth, SSH terminals, tmux persistence, and optional local sync for IDE users. To align with that direction, this rewrite should:
+
+1. Avoid a process-global “one runtime forever” assumption. Instead, capture a stable **registry** once, and select the appropriate runtime/provider per workspace or per session.
+2. Treat backend session identity as separate from UI pane identity. Even if local stays `backendSessionId === paneId` initially, the contract should not assume it forever.
+3. Avoid “daemon” naming at the abstraction boundary. Daemon is an implementation detail; cloud/SSH is another. Prefer provider-neutral naming (e.g. “management/admin capability object”).
+4. Keep renderer behavior stable. Any `Terminal.tsx` work should be decomposition-only (init plan + applier + stream buffering), preserving the same attach/detach semantics and invariants (no-complete-on-exit, scroll restoration).
+
 ### What’s local-only today (current coupling)
 
 1. **Terminal IO keys by `paneId` (client identity):** `terminal.createOrAttach`, `terminal.write`, and `terminal.stream` treat `paneId` as the stable session key (`apps/desktop/src/lib/trpc/routers/terminal/terminal.ts`).
@@ -124,7 +139,7 @@ This plan intentionally does not implement cloud terminals, but the abstraction 
 
 1. **Backend-agnostic event delivery:** `TerminalEventSource.subscribe…() => unsubscribe` is compatible with WebSocket/SSE backends and avoids leaking Node `EventEmitter` semantics.
 2. **Capabilities over “mode strings”:** cloud backends can expose a capability surface without introducing a new `"cloud"` mode string that bleeds into callers.
-3. **Identity decoupling is planned:** Milestone 7 (optional) calls out introducing `backendSessionId`, which is required for cloud (server-assigned IDs, multi-device access).
+3. **Identity decoupling is planned:** Milestone 7 (cloud readiness) introduces `backendSessionId`, which is required for cloud (server-assigned IDs, multi-device access).
 
 ### The key realization: cloud terminals need a Workspace Runtime, not just a Terminal Runtime
 
@@ -160,15 +175,15 @@ This decision materially changes the scope and correctness model of cloud termin
 
 ### Compatibility notes (naming + semantics)
 
-1. The current plan uses `daemon: DaemonManagement | null` as the capability object. For cloud, that concept should generalize to something like `management: TerminalManagement | null` (daemon is an implementation detail).
+1. This plan uses a **provider-neutral** capability object (`management: TerminalManagement | null`). In local persistence mode, the implementation is backed by the daemon manager, but callers should not depend on “daemon” as a concept.
 2. Capability presence should mean “configured/available”, not “healthy right now”; mid-session disconnects should surface errors + explicit connection lifecycle events rather than silently flipping capabilities at runtime.
 
 
 ## Open Questions
 
-1. Naming: should the abstraction be named `TerminalRuntime`, `TerminalService`, or keep `getActiveTerminalManager()` and add a new `getTerminalRuntime()` alongside it? (This plan assumes `getTerminalRuntime()` returning a `TerminalRuntime` facade exported from `apps/desktop/src/main/lib/terminal/index.ts`.)
+1. Naming: should the main-process entry point be `getTerminalRuntimeRegistry()` (terminal-only) or `getWorkspaceProviderRegistry()` (terminal + future agentEvents/changes/files)? (This plan assumes `getTerminalRuntimeRegistry()` now, and we can later embed it inside a workspace provider registry without changing the router/UI contracts.)
 2. Should we keep the existing tRPC endpoint names (`terminal.listDaemonSessions`, `terminal.killAllDaemonSessions`, etc.) for backwards compatibility in the renderer? (This plan assumes “yes” to minimize churn and risk.)
-3. For future cloud terminals, do we want to introduce a distinct backend session identifier (`backendSessionId`) now (even if it equals `paneId` today), or defer it to a follow-up after the daemon vs in-process leakage is fixed? (This plan assumes we defer a wire-contract identity migration to keep this refactor lower-risk, but we explicitly call out a follow-up milestone to introduce `backendSessionId` cleanly if/when cloud is near-term.)
+3. Provider selection: how do we decide whether a workspace uses the local terminal runtime vs a cloud/SSH runtime? (Expected: based on workspace metadata such as `cloudWorkspaceId` / workspace type, not on UI state.)
 
 
 ## Plan of Work
@@ -184,14 +199,15 @@ This section is illustrative. It shows the intended file layout, key types, and 
 ### File Tree (Proposed)
 
     apps/desktop/src/main/lib/terminal/
-      index.ts                         # exports getTerminalRuntime()
-      runtime.ts                        # TerminalRuntime + selection (process-scoped)
+      index.ts                         # exports getTerminalRuntimeRegistry()
+      runtime-registry.ts               # per-workspace selection + caching (process-scoped registry)
+      runtime.ts                        # TerminalRuntime adapters/types (backend-agnostic surface)
       manager.ts                        # in-process backend (existing)
       daemon-manager.ts                 # daemon backend (existing)
       types.ts                          # existing shared terminal types (CreateSessionParams, SessionResult, events)
 
     apps/desktop/src/lib/trpc/routers/terminal/
-      terminal.ts                       # uses getTerminalRuntime(); no instanceof checks
+      terminal.ts                       # uses getTerminalRuntimeRegistry(); no instanceof checks
       terminal.stream.test.ts           # stream invariants (exit does not complete)
 
     apps/desktop/src/renderer/.../Terminal/
@@ -254,31 +270,43 @@ The goal is to stop encoding backend choice as a “mode string” that callers 
       }): () => void;
     }
 
-    export interface DaemonManagement {
+    export interface TerminalManagement {
       listSessions(): Promise<ListSessionsResponse>;
       forceKillAll(): Promise<void>;
       resetHistoryPersistence(): Promise<void>;
+    }
+
+    export interface TerminalRuntimeRegistry {
+      // Runtime selection should be workspace-scoped (local vs cloud later).
+      getForWorkspaceId(workspaceId: string): TerminalRuntime;
+      // Transitional: allow lookups by pane until backendSessionId is fully introduced.
+      getForPaneId(paneId: string): TerminalRuntime;
+      // For legacy/global endpoints that aren't workspace-scoped yet.
+      getDefault(): TerminalRuntime;
     }
 
     export interface TerminalRuntime {
       sessions: TerminalSessionOperations;
       workspaces: TerminalWorkspaceOperations;
       events: TerminalEventSource;
-      daemon: DaemonManagement | null;
+      management: TerminalManagement | null;
       capabilities: TerminalCapabilities;
     }
 
-`getTerminalRuntime()` must return the same instance across the process lifetime (or at minimum the same `sessions` object), so we do not multiply event listeners or daemon connections.
+`getTerminalRuntimeRegistry()` must return the same registry instance across the process lifetime, and the registry must return stable runtime objects (at least stable `events`/listener wiring) so we do not multiply event listeners or backend connections.
 
-    let cachedRuntime: TerminalRuntime | null = null;
+    let cachedRegistry: TerminalRuntimeRegistry | null = null;
+    const paneToRuntime = new Map<string, TerminalRuntime>();
+    // Implementation detail: keep this mapping updated from createOrAttach/detach/kill
+    // so `getForPaneId()` can route stream subscriptions correctly until backendSessionId.
 
-    export function getTerminalRuntime(): TerminalRuntime {
-      if (cachedRuntime) return cachedRuntime;
+    export function getTerminalRuntimeRegistry(): TerminalRuntimeRegistry {
+      if (cachedRegistry) return cachedRegistry;
 
       const backend = getActiveTerminalManager(); // existing selection logic (cached by “requires restart”)
       const daemonManager = backend instanceof DaemonTerminalManager ? backend : null;
 
-      cachedRuntime = {
+      const localRuntime: TerminalRuntime = {
         sessions: {
           createOrAttach: (params) => backend.createOrAttach(params),
           write: async (params) => backend.write(params),
@@ -323,7 +351,7 @@ The goal is to stop encoding backend choice as a “mode string” that callers 
             return () => backend.off("terminalExit", onExit);
           },
         },
-        daemon: daemonManager
+        management: daemonManager
           ? {
               listSessions: () => daemonManager.listDaemonSessions(),
               forceKillAll: () => daemonManager.forceKillAll(),
@@ -338,27 +366,40 @@ The goal is to stop encoding backend choice as a “mode string” that callers 
         },
       };
 
-      return cachedRuntime;
+      cachedRegistry = {
+        getForWorkspaceId: (_workspaceId) => {
+          // Today: all workspaces use the local runtime. Future: cloud/SSH selection here.
+          return localRuntime;
+        },
+        getForPaneId: (paneId) => paneToRuntime.get(paneId) ?? localRuntime,
+        getDefault: () => localRuntime,
+      };
+
+      return cachedRegistry;
     }
 
 Notes:
 
 1. The `backend instanceof DaemonTerminalManager` check is allowed here because this module is the only backend-selection boundary; the tRPC router and UI must not need it.
-2. If daemon capability exists but a call fails (daemon unreachable, request fails), we propagate the error. We do not convert failures into “daemon disabled” states.
-3. `runtime.daemon !== null` indicates the persistent backend is configured/active, not that it is healthy “right now”. If the daemon process crashes or the socket drops mid-session, operations may throw and the backend emits existing per-pane `disconnect:*` / `error:*` events. The runtime does not dynamically flip `daemon` to `null`.
+2. If management capability exists but a call fails (daemon unreachable, request fails), we propagate the error. We do not convert failures into “persistence disabled” states.
+3. `runtime.management !== null` indicates the persistent backend is configured/active, not that it is healthy “right now”. If the daemon process crashes or the socket drops mid-session, operations may throw and the backend emits existing per-pane `disconnect:*` / `error:*` events. The runtime does not dynamically flip `management` to `null`.
 
 
 ### tRPC Router Shape (No Daemon Type Checks)
 
-The terminal router captures the runtime once when the router is created (not per request), and then delegates consistently. It branches only on the presence of a capability object (`runtime.daemon`), never on `instanceof`.
+The terminal router captures the **runtime registry** once when the router is created. Each procedure then selects the correct runtime (local vs cloud later) without using `instanceof` checks.
+
+Key rule: capture the registry once, but do not assume there is only one runtime for the entire process forever.
 
     export const createTerminalRouter = () => {
-      const runtime = getTerminalRuntime();
+      const registry = getTerminalRuntimeRegistry();
 
       return router({
         createOrAttach: publicProcedure
           .input(...)
-          .mutation(async ({ input }) => runtime.sessions.createOrAttach(input)),
+          .mutation(async ({ input }) =>
+            registry.getForWorkspaceId(input.workspaceId).sessions.createOrAttach(input),
+          ),
 
         stream: publicProcedure
           .input(z.string())
@@ -366,6 +407,7 @@ The terminal router captures the runtime once when the router is created (not pe
             observable<TerminalPaneEvent>((emit) => {
               // IMPORTANT: do not complete on exit.
               // Exit is a state transition and must not terminate the subscription.
+              const runtime = registry.getForPaneId(paneId);
               return runtime.events.subscribePane({
                 paneId,
                 onEvent: (event) => emit.next(event),
@@ -374,8 +416,10 @@ The terminal router captures the runtime once when the router is created (not pe
           ),
 
         listDaemonSessions: publicProcedure.query(async () => {
-          if (!runtime.daemon) return { daemonModeEnabled: false, sessions: [] };
-          const response = await runtime.daemon.listSessions();
+          // Note: endpoint name kept for backwards compatibility; capability is provider-neutral.
+          const runtime = registry.getDefault();
+          if (!runtime.management) return { daemonModeEnabled: false, sessions: [] };
+          const response = await runtime.management.listSessions();
           return { daemonModeEnabled: true, sessions: response.sessions };
         }),
       });
@@ -457,7 +501,7 @@ Main call flow (today and after refactor; the difference is where switching happ
       v
     Electron Main (tRPC router)
       |
-      | getTerminalRuntime().sessions  (no backend checks in router)
+      | getTerminalRuntimeRegistry().getForWorkspaceId(...)  (no backend checks in router)
       v
     Terminal Backend (in-process OR daemon-manager)
       |
@@ -503,53 +547,55 @@ Acceptance:
 2. No runtime behavior changes yet.
 
 
-### Milestone 2: Implement `TerminalRuntime` Facade + Capabilities
+### Milestone 2: Implement TerminalRuntime Registry + Capabilities
 
-This milestone introduces a single runtime entry point that owns backend selection and exposes backend-specific capabilities in a consistent, no-branching way to callers.
+This milestone introduces a single runtime **registry** entry point that owns backend selection and exposes backend-specific capabilities in a consistent, no-branching way to callers.
 
 Approach:
 
-1. Create a small facade in `apps/desktop/src/main/lib/terminal/` (recommended: `apps/desktop/src/main/lib/terminal/runtime.ts`) that exports:
-   - `getTerminalRuntime(): TerminalRuntime`
+1. Create a small facade in `apps/desktop/src/main/lib/terminal/` (recommended: `apps/desktop/src/main/lib/terminal/runtime-registry.ts`) that exports:
+   - `getTerminalRuntimeRegistry(): TerminalRuntimeRegistry`
 2. `TerminalRuntime` should have three parts:
    - `sessions: TerminalSessionOperations` (per-pane session lifecycle operations; normalized to async)
    - `workspaces: TerminalWorkspaceOperations` (workspace-scoped helpers; normalized to async)
    - `events: TerminalEventSource` (backend-agnostic subscribe API for per-pane events and `terminalExit`)
-   - `daemon: DaemonManagement | null` (nullable capability object; `null` when daemon management is not supported/active)
+   - `management: TerminalManagement | null` (nullable capability object; `null` when persistence/session management is not supported/active)
    - `capabilities: { persistent: boolean; coldRestore: boolean; remoteManagement: boolean }` (feature flags that do not encode implementation details and leave room for a future cloud backend)
-3. Do not use “no-op admin methods”. The absence of daemon capabilities must be represented structurally (`daemon: null`) so callers cannot confuse “unsupported” with “success”.
-4. Ensure the facade is process-scoped and constructed once. The tRPC router should capture the runtime once at router construction time (not per request) to avoid multiplying event listeners or daemon client connections.
-5. Export the runtime from `apps/desktop/src/main/lib/terminal/index.ts` as the only supported way to reach daemon-specific functionality.
+3. Do not use “no-op admin methods”. The absence of management capability must be represented structurally (`management: null`) so callers cannot confuse “unsupported” with “success”.
+4. Ensure the registry is process-scoped and constructed once. The tRPC router should capture the registry once at router construction time (not per request) to avoid multiplying event listeners or backend client connections.
+5. Export the registry from `apps/desktop/src/main/lib/terminal/index.ts` as the only supported way to reach backend-specific functionality.
 6. Clarify daemon mid-session failure semantics:
-   - `runtime.daemon !== null` reflects feature/mode availability, not daemon “health right now”.
-   - If the daemon disconnects, operations may throw and per-pane disconnect/error events are emitted; the runtime does not dynamically flip `daemon` to `null`.
+   - `runtime.management !== null` reflects feature/mode availability, not daemon “health right now”.
+   - If the daemon disconnects, operations may throw and per-pane disconnect/error events are emitted; the runtime does not dynamically flip `management` to `null`.
 
 Acceptance:
 
 1. The runtime and capabilities surface is defined in `apps/desktop/src/main/lib/terminal/` and is the only code that knows which backend is active.
-2. In non-daemon mode, `runtime.daemon` is `null` and callers must handle that explicitly; unsupported operations are not silently treated as success.
+2. In non-daemon mode, `runtime.management` is `null` and callers must handle that explicitly; unsupported operations are not silently treated as success.
 
 
 ### Milestone 3: Migrate tRPC `terminal.*` Router to the Runtime
 
-This milestone removes daemon branching from the tRPC router by routing all terminal work through `getTerminalRuntime()`.
+This milestone removes daemon branching from the tRPC router by routing all terminal work through `getTerminalRuntimeRegistry()`.
 
 Scope:
 
 1. Update `apps/desktop/src/lib/trpc/routers/terminal/terminal.ts` to use:
-   - `const runtime = getTerminalRuntime()` (or equivalent)
-   - Replace `instanceof DaemonTerminalManager` checks with checks on `runtime.daemon` capability presence.
+   - `const registry = getTerminalRuntimeRegistry()` (or equivalent)
+   - For mutations/queries that have `workspaceId` in input, select `const runtime = registry.getForWorkspaceId(input.workspaceId)` (future: local vs cloud).
+   - For `stream` while it is still keyed by `paneId`, select `const runtime = registry.getForPaneId(paneId)` (transitional until `backendSessionId` is fully wired).
+   - Replace `instanceof DaemonTerminalManager` checks with checks on `runtime.management` capability presence.
    - Use `runtime.events.subscribePane(...)` for the `terminal.stream` subscription implementation (no direct EventEmitter usage in the router).
-2. Update any other main-process call sites that depend on EventEmitter event names (for example `apps/desktop/src/main/windows/main.ts` listening for `terminalExit`) to use `runtime.events.subscribeTerminalExit(...)` so EventEmitter semantics do not leak beyond the backend boundary.
+2. Update any other main-process call sites that depend on EventEmitter event names (for example `apps/desktop/src/main/windows/main.ts` listening for `terminalExit`) to use `registry.getDefault().events.subscribeTerminalExit(...)` so EventEmitter semantics do not leak beyond the backend boundary.
 3. Preserve the existing endpoint names and response shapes so the renderer does not need behavioral changes:
    - `listDaemonSessions` returns `{ daemonModeEnabled, sessions }`
    - `killAllDaemonSessions` returns `{ daemonModeEnabled, killedCount }`
    - `killDaemonSessionsForWorkspace` returns `{ daemonModeEnabled, killedCount }`
-   - `clearTerminalHistory` returns `{ success: true }` but calls daemon history reset when the daemon capability is present
+   - `clearTerminalHistory` returns `{ success: true }` but calls history reset when the management capability is present
 4. Ensure the `stream` subscription continues to use `observable` and continues to not complete on `exit`.
 5. Error semantics must be explicit:
-   - If daemon capability is absent, return `daemonModeEnabled: false` (UI will show “restart app after enabling persistence” messaging).
-   - If daemon capability is present but the operation fails (daemon unreachable, request fails), surface the error (do not convert it into `daemonModeEnabled: false`).
+   - If management capability is absent, return `daemonModeEnabled: false` (UI will show “restart app after enabling persistence” messaging).
+   - If management capability is present but the operation fails (daemon unreachable, request fails), surface the error (do not convert it into `daemonModeEnabled: false`).
 
 Acceptance:
 
@@ -563,7 +609,7 @@ This milestone makes the new boundary hard to accidentally regress later.
 
 Scope:
 
-1. Add a unit test that asserts the non-daemon runtime returns `daemon: null` (capability absent) without requiring daemon availability. This test must not spawn a real daemon.
+1. Add a unit test that asserts the non-daemon runtime returns `management: null` (capability absent) without requiring daemon availability. This test must not spawn a real daemon.
 2. Keep and/or extend the existing “stream does not complete on exit” regression test in `apps/desktop/src/lib/trpc/routers/terminal/terminal.stream.test.ts`.
 3. If we add any new helper modules, ensure they are covered by at least one focused unit test.
 4. Add a test that ensures admin operations fail loudly on error (for example, simulate a daemon management call throwing and assert the error propagates), so we do not accidentally reintroduce silent “disabled” fallbacks for real failures.
@@ -640,15 +686,18 @@ Acceptance:
 2. No Node.js imports are introduced in renderer code as part of this refactor.
 
 
-### Milestone 7 (Optional / Cloud-Readiness): Introduce `backendSessionId`
+### Milestone 7 (Cloud Readiness): Introduce `backendSessionId`
 
-This milestone is a forward-looking improvement that decouples renderer pane identity (`paneId`) from backend session identity (`backendSessionId`). It should be considered once the daemon vs in-process leakage is resolved and the core refactor is stable.
+This milestone is required groundwork for cloud/SSH-style backends: it decouples renderer pane identity (`paneId`) from backend session identity (`backendSessionId`). Complete this before introducing any cloud/SSH provider to avoid reworking the router + renderer contracts again.
 
 Scope:
 
 1. Extend `createOrAttach` to return `backendSessionId` (for local backends it can equal `paneId`).
 2. Store the mapping `{ paneId -> backendSessionId }` in renderer state and use `backendSessionId` for subsequent lifecycle operations (write/resize/signal/kill/detach and stream subscription), while continuing to key UI state by `paneId`.
-3. Add lifecycle events needed for cloud-style backends (non-goal to implement now, but define the contract):
+3. Update the runtime registry to route by backend session identity:
+   - Avoid relying on `getForPaneId(...)` as the long-term selection mechanism.
+   - Prefer selecting runtimes by workspace/session IDs (cloud-safe), not by UI pane IDs.
+4. Add lifecycle events needed for cloud-style backends (define the contract even if some implementations are stubs initially):
    - connection lifecycle: `connectionStateChanged`, `authExpired`
    - per-operation timeout/retry policy at the boundary (even if implemented as “none” initially)
 
@@ -684,7 +733,7 @@ This plan is safe to apply iteratively:
 
 ## Risks and Mitigations
 
-Risk: The runtime facade changes event wiring in a way that causes missed output or duplicate listeners.
+Risk: The runtime registry/adapters change event wiring in a way that causes missed output or duplicate listeners.
 
 Mitigation: Keep the EventEmitter contract unchanged (`data:${paneId}`, `exit:${paneId}`), keep `terminal.stream` semantics unchanged, and use tests + manual matrix to confirm “output still flows after exit/cold restore”.
 
@@ -694,11 +743,15 @@ Mitigation: Preserve the current renderer sequencing (subscription established w
 
 Risk: Admin capability handling masks real errors (a true daemon failure being reported as “disabled”).
 
-Mitigation: Represent daemon management as a nullable capability object (`daemon: null` when unavailable). When `daemon` is present but calls fail, propagate errors (and test this explicitly).
+Mitigation: Represent persistence/session management as a nullable capability object (`management: null` when unavailable). When `management` is present but calls fail, propagate errors (and test this explicitly).
 
 Risk: A future cloud backend would require different identity mapping than `paneId == sessionId`.
 
-Mitigation: Do not change identity mapping in this refactor, but ensure the runtime contract does not assume Unix sockets or local process ownership. The future cloud backend should implement the same contract behind `TerminalRuntime`.
+Mitigation: Introduce `backendSessionId` (Milestone 7) so the contract no longer implies `paneId === backendSessionId` (local can keep equality as an implementation detail). The future cloud backend should implement the same contract behind `TerminalRuntime` without changing the renderer again.
+
+Risk: Process-global runtime assumptions block local + cloud workspaces from coexisting (forcing branching to leak back into routers/UI).
+
+Mitigation: Make runtime selection workspace-/session-scoped via the registry. The router captures the registry, not a single global runtime.
 
 Risk: Reattach scroll restoration regresses during refactor (missing `viewportY` plumbing or restoring at the wrong time).
 
@@ -719,19 +772,19 @@ Mitigation: Keep the “stream does not complete on exit” regression test as P
 
 ### Milestone 2
 
-- [ ] Implement `getTerminalRuntime()` facade in `apps/desktop/src/main/lib/terminal/`
-- [ ] Implement daemon management as `daemon: DaemonManagement | null` (no no-op admin methods)
+- [ ] Implement `getTerminalRuntimeRegistry()` in `apps/desktop/src/main/lib/terminal/`
+- [ ] Implement session management as `management: TerminalManagement | null` (no no-op admin methods)
 - [ ] Run `bun run typecheck --filter=@superset/desktop`
 
 ### Milestone 3
 
-- [ ] Migrate `apps/desktop/src/lib/trpc/routers/terminal/terminal.ts` to runtime
+- [ ] Migrate `apps/desktop/src/lib/trpc/routers/terminal/terminal.ts` to runtime registry (`getTerminalRuntimeRegistry()`)
 - [ ] Remove `instanceof DaemonTerminalManager` checks
 - [ ] Run `bun test --filter=@superset/desktop`
 
 ### Milestone 4
 
-- [ ] Add/adjust unit tests for capability presence (`daemon: null`) and error propagation
+- [ ] Add/adjust unit tests for capability presence (`management: null`) and error propagation
 - [ ] Confirm stream exit regression test still covers “no complete on exit”
 - [ ] Run full validation commands
 
@@ -757,21 +810,26 @@ Mitigation: Keep the “stream does not complete on exit” regression test as P
 - [ ] Refactor `Terminal.tsx` to use helpers, preserving behavior
 - [ ] Preserve detach/reattach scroll restoration (`viewportY`)
 
-### Milestone 7 (Optional)
+### Milestone 7 (Cloud Readiness)
 
 - [ ] Add `backendSessionId` to `createOrAttach` response (local backends: equals `paneId`)
 - [ ] Store `{ paneId -> backendSessionId }` mapping in renderer state; use backend ID for operations
+- [ ] Update runtime registry selection to be workspace/session-based (avoid long-term reliance on `getForPaneId`)
 - [ ] Define/introduce lifecycle events needed for cloud backends (connection/auth)
 
 
 ## Surprises & Discoveries
 
-(Fill this in during implementation with dates and short, factual notes.)
+- 2026-01-11: Reviewed `docs/CLOUD_WORKSPACE_PLAN.md` — cloud is source of truth with optional local sync; implies a workspace-scoped provider boundary (terminal + agentEvents + changes/files), not “terminal-only”.
+- 2026-01-11: Upstream main includes detach/reattach scroll restoration (`viewportY`, PR #698); treat as a stable behavior invariant during refactor.
 
 
 ## Decision Log
 
-(Move items from Open Questions here as they are resolved; include rationale and date.)
+- 2026-01-11: Use a process-scoped **runtime registry** (`getTerminalRuntimeRegistry()`), not a single global runtime; router captures the registry and selects runtimes per workspace/session so local + cloud can coexist later.
+- 2026-01-11: Keep the abstraction boundary provider-neutral: expose `management: TerminalManagement | null` (capability object) while keeping legacy endpoint names like `listDaemonSessions` for UI compatibility.
+- 2026-01-11: Preserve renderer behavior; any `Terminal.tsx` changes are decomposition-only (init plan + applier + stream buffering), preserving “no complete on exit” and `viewportY` scroll restoration.
+- 2026-01-11: Treat `backendSessionId` as required groundwork for cloud/SSH backends (Milestone 7). Local may keep `backendSessionId === paneId` as an implementation detail, but the contract must not assume it.
 
 
 ## Outcomes & Retrospective
